@@ -10,13 +10,13 @@
 
 <a id="zh"></a>
 
-## 摘要
+## Abstract
 
 本项目实现了一套基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架。给定单张人脸图像与自然语言指令，系统首先利用 DECA/3DMM 显式建模输入人脸的身份几何、姿态与表情参数，再预测目标表情对应的参数化几何控制信号，并将该控制信号注入 FLUX.2-klein 的流匹配生成过程。该设计把可解释的三维人脸先验与高保真生成模型结合起来，在增强目标表情可控性的同时尽量保持原始身份特征一致。
 
 本仓库基于 [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace) 的控制思想、[DECA](https://github.com/yfeng95/DECA) 的 3DMM 参数估计与渲染能力，以及 [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base) 的官方文本编码器和流匹配生成配置完成训练与推理实现。训练数据使用自建的 FacePairEmoji 表情配对数据集，并支持中文与英文编辑指令。
 
-## 主要特点
+## Highlights
 
 - **参数化表情控制**：使用 DECA/3DMM 将输入人脸分解为身份、姿态、表情、光照和相机参数，避免仅依赖隐式图像条件。
 - **指令驱动编辑**：支持中文和英文自然语言指令，预测目标表情的 DECA 表情参数与下颌姿态。
@@ -24,7 +24,7 @@
 - **身份保持约束**：通过参考控制路径与 RCG 推理策略增强身份一致性，并与原始 FLUX.2 基线进行并列对比。
 
 <!-- demo-gallery-start -->
-## 定性结果
+## Demo
 
 下表以源表情和目标表情构成 7×7 定性对比矩阵，行列均按 `Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise` 排列。每一行对应同一输入身份，左侧仅标注该样例原始分辨率；浅黄色对角线单元格为原始输入图，其余单元格直接引用 `demo_output/` 中的原始生成结果。每个非对角单元格使用嵌套表格展示四图对比：上排为本方法 `Control-CN / Control-EN`，下排为无 3DMM 控制的原始 FLUX.2 基线 `OG-CN / OG-EN`。
 
@@ -321,7 +321,7 @@ bash train/train_stage2.sh
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `stage1.ckpt_path` | `./checkpoints/stage1/.../best-step-2320.pt` | **必须**指向上一步训练好的 Stage1 ckpt |
+| `stage1.ckpt_path` | `./checkpoints/stage1/.../best-step-{N}.pt` | **必须**指向上一步训练好的 Stage1 ckpt |
 | `stage2.resume_path` | null | 若中断，可填某 ckpt 续训 |
 | `stage2.detach_deca_control` | true | true 时 flow loss 不反传 DECA renderer，省显存；false 走完整端到端 |
 | `flux.model_path` | FLUX.2-klein-base 目录 | 需 Diffusers 格式；klein-base **非蒸馏**，transformer guidance 必须传 None |
@@ -345,7 +345,7 @@ python infer/infer_stage1.py \
     --ref     ./原图.png \
     --prompt  "make her burst into laughter" \
     --output_dir ./output_stage1 \
-    --ckpt    ./checkpoints/stage1/stage1-<timestamp>/best-step-2320.pt
+    --ckpt    ./checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt
 ```
 
 ### 5.2 Stage2 推理 (端到端表情编辑)
@@ -369,7 +369,7 @@ for LAM in 0.0 1.0 3.0 5.0 7.0; do
     --config configs/infer_stage2.yaml \
     --ref 原图.png \
     --prompt "make her burst into laughter" \
-    --stage2_ckpt ./checkpoints/stage2/.../best-step-1920.pt \
+    --stage2_ckpt ./checkpoints/stage2/.../best-step-{N}.pt \
     --rcg_lambda ${LAM} \
     --output_dir ./output_stage2/sweep_lambda_${LAM}
 done
@@ -381,7 +381,7 @@ python infer/infer_stage2.py \
     --config configs/infer_stage2.yaml \
     --ref 原图.png \
     --prompt "make her burst into laughter" \
-    --stage2_ckpt ./checkpoints/stage2/.../best-step-1920.pt \
+    --stage2_ckpt ./checkpoints/stage2/.../best-step-{N}.pt \
     --rcg_enabled false \
     --output_dir ./output_stage2/no_rcg
 ```
@@ -390,7 +390,7 @@ python infer/infer_stage2.py \
 ```bash
 python infer/infer_stage2.py --config configs/infer_stage2.yaml \
     --ref 原图.png --prompt "smile" \
-    --stage2_ckpt ./checkpoints/stage2/.../best-step-1920.pt \
+    --stage2_ckpt ./checkpoints/stage2/.../best-step-{N}.pt \
     --opts sampling.num_inference_steps=28 sampling.height=512 sampling.width=512 \
            sampling.rcg.lambda=2.5
 ```
@@ -497,11 +497,11 @@ The implementation follows the control paradigm of [ControlFace (CVPR 2025)](htt
 - **FLUX.2 flow-matching generation**: Reference and target 3DMM control maps are projected into control tokens and injected into the FLUX.2-klein transformer.
 - **Identity-preserving inference**: Reference-Control Guidance (RCG) strengthens identity consistency and enables direct comparison with the vanilla FLUX.2 baseline.
 
-## Qualitative Results
+## Demo
 
 The qualitative matrix is shared with the Chinese section to avoid duplicating a large set of images in the README. The rows and columns follow the same expression order: `Neutral -> Angry -> Disgust -> Fear -> Happy -> Sad -> Surprise`. Each row corresponds to one input identity, and the left column only reports the original image resolution. The pale-yellow diagonal cells show the input images, while all off-diagonal cells directly reference the original generated results under `demo_output/`. Each off-diagonal cell contains a nested 2×2 comparison: the top row is our controlled model (`Control-CN / Control-EN`), and the bottom row is the vanilla FLUX.2 baseline without 3DMM control (`OG-CN / OG-EN`).
 
-View the matrix here: [Qualitative Results](#定性结果).
+View the matrix here: [Demo](#demo).
 
 ## 1. Environment
 
