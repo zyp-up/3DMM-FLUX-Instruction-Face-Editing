@@ -4,7 +4,11 @@
 </p>
 
 <p align="center">
-  <a href="#zh">中文</a> | <a href="#en">English</a>
+  <img src="docs/figures/overview.svg" width="960" alt="3DMM-FLUX overall architecture">
+</p>
+
+<p align="center">
+  <a href="#zh">Chinese</a> | <a href="#en">English</a>
 </p>
 
 <a id="zh"></a>
@@ -290,6 +294,10 @@ python scripts/verify_deca_params.py \
 
 ## 3. Stage1 训练 (Conditional DECA Encoder)
 
+<p align="center">
+  <img src="docs/figures/stage1_training.svg" width="860" alt="Stage1 training architecture">
+</p>
+
 Stage1 训练一个**文本条件的 DECA 表情/下颌头**：
 
 - 输入：参考图 A（FAN crop 后 224×224）+ 文本指令 t
@@ -324,6 +332,10 @@ bash train/train_stage1.sh
 ---
 
 ## 4. Stage2 训练 (FLUX.2 Control Mixer)
+
+<p align="center">
+  <img src="docs/figures/overview.svg" width="860" alt="Stage2 training architecture">
+</p>
 
 Stage2 在 Stage1 基础上联合训练：
 
@@ -360,7 +372,30 @@ bash train/train_stage2.sh
 
 ## 5. 推理
 
-### 5.1 Stage1 推理 (控制图可视化)
+<p align="center">
+  <img src="docs/figures/rcg_inference.svg" width="900" alt="Reference Control Guidance inference workflow">
+</p>
+
+### 5.1 RCG (Reference Control Guidance)
+
+推理阶段先构造两组控制条件：参考控制 `D_R` 由参考图完整 DECA 参数渲染得到，目标控制 `D_T` 只替换 Stage1 预测的目标表情和下颌参数，其余身份、纹理、相机和光照参数保持参考图不变。随后 CMM 进行两次前向：第一次输入 `(D_R, D_R)` 得到参考噪声预测，第二次输入 `(D_T, D_R)` 得到目标噪声预测，并沿目标-参考差异方向外推：
+
+```
+eps_ref = DiT(cat(latents, ref_latents, CMM(D_R, D_R)), text)
+eps_tgt = DiT(cat(latents, ref_latents, CMM(D_T, D_R)), text)
+eps     = eps_ref + λ · (eps_tgt - eps_ref)
+```
+
+| λ | 行为 |
+|---|---|
+| 0.0 | 生成 ≈ 参考图（几乎不变） |
+| 1.0 | 等价于无 RCG（eps = eps_tgt） |
+| 3.0 | 默认，表情清晰且身份稳 |
+| >3 | 表情更夸张，但身份漂移风险上升 |
+
+RCG 以参考控制为基准，沿目标表情方向放大引导；`λ` 控制表情变化幅度，通常可在 `0/1/3/5/7` 中 sweep 选择。
+
+### 5.2 Stage1 推理 (控制图可视化)
 
 用于验证 Stage1 是否能根据 prompt 输出合理的表情几何，输出 6 张图（参考路径 D_R + 目标路径 D_T，各 rendered/normal/albedo）+ 2 个 9ch tensor。
 
@@ -372,7 +407,7 @@ python infer/infer_stage1.py \
     --ckpt    ./checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt
 ```
 
-### 5.2 Stage2 推理 (端到端表情编辑)
+### 5.3 Stage2 推理 (端到端表情编辑)
 
 配置文件：[`configs/infer_stage2.yaml`](configs/infer_stage2.yaml) （独立于训练 yaml，只放推理相关字段）。
 
@@ -418,21 +453,6 @@ python infer/infer_stage2.py --config configs/infer_stage2.yaml \
     --opts sampling.num_inference_steps=28 sampling.height=512 sampling.width=512 \
            sampling.rcg.lambda=2.5
 ```
-
-**RCG (Reference Control Guidance) 简介：** 在 CMM 的两路条件之间外推：
-
-```
-eps_ref = DiT(cat(latents, ref_latents, CMM(D_R, D_R)), text)   # ref 路径
-eps_tgt = DiT(cat(latents, ref_latents, CMM(D_T, D_R)), text)   # tgt 路径
-eps     = eps_ref + λ · (eps_tgt - eps_ref)
-```
-
-| λ | 行为 |
-|---|---|
-| 0.0 | 生成 ≈ 参考图（几乎不变） |
-| 1.0 | 等价于无 RCG（eps = eps_tgt） |
-| 3.0 | 默认，表情清晰且身份稳 |
-| >3 | 表情更夸张，但身份漂移风险上升 |
 
 推理输出（默认 `output_stage2/`）：
 - `final.png`：FLUX.2 生成的最终图
@@ -640,6 +660,10 @@ python scripts/verify_deca_params.py \
 
 ## 3. Stage-1 Training
 
+<p align="center">
+  <img src="docs/figures/stage1_training.svg" width="860" alt="Stage1 training architecture">
+</p>
+
 Stage 1 trains a text-conditioned DECA expression encoder:
 
 - Input: reference face image and text instruction.
@@ -656,6 +680,10 @@ bash train/train_stage1.sh
 The best checkpoint is saved under `checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt`.
 
 ## 4. Stage-2 Training
+
+<p align="center">
+  <img src="docs/figures/overview.svg" width="860" alt="Stage2 training architecture">
+</p>
 
 Stage 2 jointly trains the FLUX.2 control pathway:
 
@@ -674,6 +702,31 @@ The resulting checkpoint is saved under `checkpoints/stage2/stage2-<timestamp>/b
 
 ## 5. Inference
 
+<p align="center">
+  <img src="docs/figures/rcg_inference.svg" width="900" alt="Reference Control Guidance inference workflow">
+</p>
+
+### 5.1 Reference Control Guidance (RCG)
+
+At inference time, the system renders two control conditions. The reference control `D_R` is rendered from the complete DECA parameters of the reference image, while the target control `D_T` only replaces expression and jaw parameters predicted by Stage 1; identity, texture, camera, and lighting remain inherited from the reference image. The Control Mixer then performs two forward passes:
+
+```text
+eps_ref = DiT(cat(latents, ref_latents, CMM(D_R, D_R)), text)
+eps_tgt = DiT(cat(latents, ref_latents, CMM(D_T, D_R)), text)
+eps     = eps_ref + lambda * (eps_tgt - eps_ref)
+```
+
+| lambda | Behavior |
+|---|---|
+| 0.0 | nearly unchanged reference image |
+| 1.0 | equivalent to the target branch without RCG |
+| 3.0 | default, clear expression editing with stable identity |
+| >3 | stronger expression, with higher identity-drift risk |
+
+RCG uses reference control as the identity anchor and amplifies the target-reference difference direction. The coefficient `lambda` controls the expression strength.
+
+### 5.2 Stage-1 Inference
+
 Stage-1 visualization renders the predicted 3DMM control maps:
 
 ```bash
@@ -684,6 +737,8 @@ python infer/infer_stage1.py \
   --prompt "make the person look happy" \
   --out_dir ./output_stage1_demo
 ```
+
+### 5.3 Stage-2 Inference
 
 End-to-end FLUX.2 expression editing:
 
