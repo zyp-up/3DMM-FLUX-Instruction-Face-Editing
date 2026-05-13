@@ -5,20 +5,18 @@
 </p>
 
 <p align="center">
-  <a href="#中文">中文</a> | <a href="#english">English</a>
+  <a href="#zh">中文</a> | <a href="#en">English</a>
 </p>
 
-<a id="中文"></a>
+<a id="zh"></a>
 
-## 中文
-
-### 摘要
+## 摘要
 
 本项目实现了一套基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架。给定单张人脸图像与自然语言指令，系统首先利用 DECA/3DMM 显式建模输入人脸的身份几何、姿态与表情参数，再预测目标表情对应的参数化几何控制信号，并将该控制信号注入 FLUX.2-klein 的流匹配生成过程。该设计把可解释的三维人脸先验与高保真生成模型结合起来，在增强目标表情可控性的同时尽量保持原始身份特征一致。
 
 本仓库基于 [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace) 的控制思想、[DECA](https://github.com/yfeng95/DECA) 的 3DMM 参数估计与渲染能力，以及 [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base) 的官方文本编码器和流匹配生成配置完成训练与推理实现。训练数据使用自建的 FacePairEmoji 表情配对数据集，并支持中文与英文编辑指令。
 
-### 主要特点
+## 主要特点
 
 - **参数化表情控制**：使用 DECA/3DMM 将输入人脸分解为身份、姿态、表情、光照和相机参数，避免仅依赖隐式图像条件。
 - **指令驱动编辑**：支持中文和英文自然语言指令，预测目标表情的 DECA 表情参数与下颌姿态。
@@ -26,7 +24,7 @@
 - **身份保持约束**：通过参考控制路径与 RCG 推理策略增强身份一致性，并与原始 FLUX.2 基线进行并列对比。
 
 <!-- demo-gallery-start -->
-### 定性结果
+## 定性结果
 
 下表以源表情和目标表情构成 7×7 定性对比矩阵，行列均按 `Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise` 排列。每一行对应同一输入身份，左侧仅标注该样例原始分辨率；浅黄色对角线单元格为原始输入图，其余单元格直接引用 `demo_output/` 中的原始生成结果。每个非对角单元格使用嵌套表格展示四图对比：上排为本方法 `Control-CN / Control-EN`，下排为无 3DMM 控制的原始 FLUX.2 基线 `OG-CN / OG-EN`。
 
@@ -42,28 +40,6 @@
 </table>
 
 <!-- demo-gallery-end -->
-## 中文目录
-- [摘要](#摘要)
-- [主要特点](#主要特点)
-- [定性结果](#定性结果)
-- [1. 环境配置](#1-环境配置)
-- [2. 数据准备](#2-数据准备)
-  - [2.1 下载图像数据集 (FacePairEmoji)](#21-下载图像数据集-facepairemoji)
-  - [2.2 生成表情配对 jsonl](#22-生成表情配对-jsonl)
-  - [2.3 大模型质量过滤 + 指令生成](#23-大模型质量过滤--指令生成)
-  - [2.4 离线提取 DECA 参数](#24-离线提取-deca-参数)
-  - [2.5 校验提取结果](#25-校验提取结果)
-- [3. Stage1 训练 (Conditional DECA Encoder)](#3-stage1-训练-conditional-deca-encoder)
-- [4. Stage2 训练 (FLUX.2 Control Mixer)](#4-stage2-训练-flux2-control-mixer)
-- [5. 推理](#5-推理)
-  - [5.1 Stage1 推理 (控制图可视化)](#51-stage1-推理-控制图可视化)
-  - [5.2 Stage2 推理 (端到端表情编辑)](#52-stage2-推理-端到端表情编辑)
-- [6. 配置参数说明](#6-配置参数说明)
-- [7. 项目结构](#7-项目结构)
-- [致谢](#致谢)
-- [English](#english)
-
----
 
 ## 1. 环境配置
 
@@ -506,48 +482,28 @@ ControlFace-main/
 
 ---
 
-<a id="english"></a>
+<a id="en"></a>
 
-## English
-
-[中文](#中文) | [English](#english)
-
-### Abstract
+## Abstract
 
 This repository implements **3DMM-FLUX**, an instruction-guided facial expression editing framework built on parametric 3D face representation and FLUX diffusion/flow matching. Given a single face image and a natural-language instruction, the system first estimates identity-aware geometry, pose, expression, camera, and illumination parameters with DECA/3DMM. It then predicts the target expression parameters, renders expression-aware geometric control signals, and injects them into the FLUX.2-klein flow-matching generation process. The framework combines interpretable 3D facial priors with high-fidelity generative modeling, aiming to improve expression controllability while preserving the input identity.
 
 The implementation follows the control paradigm of [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace), uses [DECA](https://github.com/yfeng95/DECA) for 3DMM parameter estimation and rendering, and adopts the official [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base) configuration, including its paired text encoder. Training is performed on the in-house FacePairEmoji expression-pair dataset with both Chinese and English editing instructions.
 
-### Highlights
+## Highlights
 
 - **Parametric expression control**: DECA/3DMM decomposes an input face into identity, pose, expression, illumination, and camera parameters, providing explicit geometric supervision.
 - **Instruction-driven editing**: Chinese and English prompts are encoded with the FLUX.2-klein text encoder and used to predict target DECA expression and jaw-pose parameters.
 - **FLUX.2 flow-matching generation**: Reference and target 3DMM control maps are projected into control tokens and injected into the FLUX.2-klein transformer.
 - **Identity-preserving inference**: Reference-Control Guidance (RCG) strengthens identity consistency and enables direct comparison with the vanilla FLUX.2 baseline.
 
-### Qualitative Results
+## Qualitative Results
 
 The qualitative matrix is shared with the Chinese section to avoid duplicating a large set of images in the README. The rows and columns follow the same expression order: `Neutral -> Angry -> Disgust -> Fear -> Happy -> Sad -> Surprise`. Each row corresponds to one input identity, and the left column only reports the original image resolution. The pale-yellow diagonal cells show the input images, while all off-diagonal cells directly reference the original generated results under `demo_output/`. Each off-diagonal cell contains a nested 2×2 comparison: the top row is our controlled model (`Control-CN / Control-EN`), and the bottom row is the vanilla FLUX.2 baseline without 3DMM control (`OG-CN / OG-EN`).
 
 View the matrix here: [Qualitative Results](#定性结果).
 
-### Contents
-
-- [Abstract](#abstract)
-- [Highlights](#highlights)
-- [Qualitative Results](#qualitative-results)
-- [1. Environment](#1-environment)
-- [2. Data Preparation](#2-data-preparation)
-- [3. Stage-1 Training](#3-stage-1-training)
-- [4. Stage-2 Training](#4-stage-2-training)
-- [5. Inference](#5-inference)
-- [6. Configuration Files](#6-configuration-files)
-- [7. Repository Structure](#7-repository-structure)
-- [Acknowledgements](#acknowledgements)
-
----
-
-### 1. Environment
+## 1. Environment
 
 We recommend the `controlface310` conda environment with CUDA 12.1 and PyTorch 2.5.1:
 
@@ -589,7 +545,7 @@ Required pretrained assets:
 | `head_template.obj`, `uv_face_eye_mask.png`, `fixed_displacement_256.npy`, `mean_texture.jpg` | `data/` | DECA static assets |
 | FLUX.2-klein-base | local `models/FLUX.2-klein-base/` or another configured path | Hugging Face model directory |
 
-### 2. Data Preparation
+## 2. Data Preparation
 
 The expected FacePairEmoji layout is:
 
@@ -631,7 +587,7 @@ python scripts/verify_deca_params.py \
   --deep_check
 ```
 
-### 3. Stage-1 Training
+## 3. Stage-1 Training
 
 Stage 1 trains a text-conditioned DECA expression encoder:
 
@@ -648,7 +604,7 @@ bash train/train_stage1.sh
 
 The best checkpoint is saved under `checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt`.
 
-### 4. Stage-2 Training
+## 4. Stage-2 Training
 
 Stage 2 jointly trains the FLUX.2 control pathway:
 
@@ -665,7 +621,7 @@ bash train/train_stage2.sh
 
 The resulting checkpoint is saved under `checkpoints/stage2/stage2-<timestamp>/best-step-{N}.pt` and contains `stage1_model`, `control_mixer`, configuration snapshots, and training step metadata.
 
-### 5. Inference
+## 5. Inference
 
 Stage-1 visualization renders the predicted 3DMM control maps:
 
@@ -690,7 +646,7 @@ python infer/infer_stage2.py \
 
 The default output directory contains `final.png`, rendered reference/target control maps, optional intermediate tensors, and `summary.json`.
 
-### 6. Configuration Files
+## 6. Configuration Files
 
 | File | Purpose |
 |---|---|
@@ -700,7 +656,7 @@ The default output directory contains `final.png`, rendered reference/target con
 
 All fields can also be overridden from the command line with `--opts key=val`.
 
-### 7. Repository Structure
+## 7. Repository Structure
 
 ```text
 ControlFace-main/
@@ -719,7 +675,7 @@ ControlFace-main/
 └── README.md
 ```
 
-### Acknowledgements
+## Acknowledgements
 
 This project builds on the following open-source works:
 
