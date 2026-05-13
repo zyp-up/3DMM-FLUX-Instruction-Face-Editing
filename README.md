@@ -1,7 +1,6 @@
 <p align="center">
   <h1 align="center">3DMM-FLUX: Instruction-Guided Facial Expression Editing</h1>
-  <h3 align="center">基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架</h3>
-  <p align="center"><b>DECA/3DMM 参数控制</b> × <b>FLUX.2-klein 流匹配生成</b> × <b>中英文指令驱动表情编辑</b></p>
+  <h1 align="center">基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架</h1>
 </p>
 
 <p align="center">
