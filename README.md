@@ -7,7 +7,7 @@
 <!-- demo-gallery-start -->
 ## 样例结果
 
-下表的行和列使用同一表情顺序：`Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise`。每一行对应同一个输入身份，左侧仅标注该样例的原始分辨率；浅黄色对角线单元格是原始输入图，其他单元格为四图对比：上排是本方法 `Control-CN / Control-EN`，下排是原始 FLUX.2 基线 `OG-CN / OG-EN`。
+下表的行和列使用同一表情顺序：`Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise`。每一行对应同一个输入身份，左侧仅标注该样例的原始分辨率；浅黄色对角线单元格是原始输入图，其他单元格为四图对比：上排是本方法 `Control-CN / Control-EN`，下排是原始 FLUX.2 基线 `OG-CN / OG-EN`。所有展示图统一画布尺寸，避免由原始长宽比造成视觉大小不一致。
 
 <table>
 <tr><th>Resolution</th><th>Neutral</th><th>Angry</th><th>Disgust</th><th>Fear</th><th>Happy</th><th>Sad</th><th>Surprise</th></tr>
