@@ -1,0 +1,83 @@
+# =============================================================================
+# Stage2 推理配置 (参考 configs/inference.yaml 与 FLUX.2-klein 官方推理参数)
+#
+# 说明:
+#   * 训练相关的项 (optimizer / loss / wandb / val_ratio / data.sources) 一律不放在这里;
+#     推理只需: 模型路径 + 采样参数 + 控制模块结构 + DECA/IO。
+#   * CLI 只保留 per-call 变项 (--ref / --prompt / --stage2_ckpt / --output_dir / --seed),
+#     其他全部从这里读; 需要临时覆盖可用 `--opts key=val` (例如
+#     `--opts sampling.num_inference_steps=28 sampling.height=1024 sampling.width=1024`).
+# =============================================================================
+
+# ---- FLUX.2 主模型 (冻结, 直接 from_pretrained) -----------------------------
+flux:
+  model_path: ./models/FLUX.2-klein-4B
+  torch_dtype: bf16                 # FLUX.2-klein 官方推理精度
+
+# ---- 采样参数 (对齐 FLUX.2-klein 官方 demo) ---------------------------------
+# 重要: FLUX.2-klein-base 是**非蒸馏**模型 (transformer.config.guidance_embeds=False),
+# 不接受 distilled guidance 张量, transformer 调用时 guidance 必须为 None。
+# CFG 能力本仓由 RCG (Reference Control Guidance) 提供, 不走官方正/负 prompt 二次前向。
+sampling:
+  num_inference_steps: 28           # FLUX.2-klein 官方推荐 28 步 flow matching
+  height: 1024                      # 官方 demo 默认 1024x1024; 显存紧张可改 512
+  width: 1024
+  seed: 42
+
+  # ---- Reference Control Guidance (RCG) ----
+  # 对齐官方 FLUX.2 image editing: ref image 先 VAE encode 成 ref_latents,
+  # 每一步 DiT 输入为 cat(noisy_target_latents, ref_latents, CMM_tokens)。
+  # RCG 在两路 CMM 条件之间外推:
+  #   eps_ref = DiT(cat(latents, ref_latents, CMM(D_R, D_R)), text)  # 参考路径 "不变化"
+  #   eps_tgt = DiT(cat(latents, ref_latents, CMM(D_T, D_R)), text)  # 目标路径
+  #   eps     = eps_ref + λ * (eps_tgt - eps_ref)                    # 沿差异方向放大
+  # 工程实现: 两路 hidden_states 上半=ref / 下半=tgt，输出后只取 target latent token 部分。
+  # 注: RCG 是在**两路 control 条件**之间外推, 与 DiT 是否蒸馏无关;
+  #     切到 FLUX.2-klein (非蒸馏) 后 RCG 仍然有效, lambda 是唯一控制变量。
+  rcg:
+    enabled: true                   # false 时仍使用 ref_latents + CMM(D_T, D_R)，但不做 ref/tgt 两路外推
+    lambda: 3.0                     # RCG 外推强度;
+                                    # 推荐 sweep 起点: 0.0 / 1.0 / 3.0 / 5.0 / 7.0 (任意 float 均可)
+                                    #   0.0 → 生成 ≈ ref (完全不变)
+                                    #   1.0 → 等价于无放大 (eps = eps_tgt)
+                                    #   3.0 → 默认
+                                    #   >3  → 表情更强烈, 但身份漂移风险上升
+
+# ---- Stage1 / Stage2 可训练头 -----------------------------------------------
+# 说明: Stage2 是端到端微调, ConditionalDECAEncoder 也在 Stage2 里被更新了
+# (见 train_stage2.py save_ckpt: 同时保存 'stage1_model' + 'control_mixer')。
+# 因此推理时:
+#   * stage1.ckpt_path  → 只用于读取结构 cfg (text_encoder_path / tokenizer_path /
+#                         deca_model_tar 等 实例化 ConditionalDECAEncoder 所需的结构参数),
+#                         权重并不从这里取。
+#   * stage2.ckpt_path  → 同时提供 (a) Conditional Encoder 端到端微调后的权重
+#                         (key='stage1_model'),  (b) Control Mixer 权重 (key='control_mixer')。
+#   若 stage2.ckpt 里没有 'stage1_model' 键 (旧 ckpt 格式), 推理将回退到 stage1
+#   老权重并打 WARN; 此时 CMM 与 Conditional Encoder 可能不对齐。
+stage1:
+  ckpt_path: ./checkpoints/stage1/best-step-2400.pt
+  # 推理时与训练端一致: drop 内部 Qwen3, 复用 pipe.text_encoder 的 hidden
+  drop_text_encoder: true
+
+stage2:
+  # 训练保存的 best-step-xxx.pt 里含 {'stage1_model', 'control_mixer', 'cfg', 'step', ...}
+  # 默认用训练 run 里的 best; CLI --stage2_ckpt 可覆盖
+  ckpt_path: ./checkpoints/stage2/stage2-20260507-161431/best-step-1920.pt
+
+# ---- 控制模块 (必须与训练期结构一致, 否则 load_state_dict 对不上) ------------
+model:
+  control_mixer_hidden_dim: 512
+  control_mixer_heads: 8
+  control_joint_dim: 128
+  control_dropout: 0.0
+
+# ---- DECA 渲染 ---------------------------------------------------------------
+deca:
+  data_dir: ./data
+  test_size: 256                    # TestData 的 crop size; 不直接影响 FLUX 生成分辨率
+
+# ---- IO ----------------------------------------------------------------------
+output:
+  dir: ./output_stage2
+  save_intermediates: true          # ref/tgt 的 rendered/normal/albedo + 9ch + tokens
+  save_summary_json: true

@@ -1,0 +1,73 @@
+### AL ###
+#Template for AL projects for Dynamics 365 Business Central
+#launch.json folder
+.vscode/
+#Cache folder
+.alcache/
+#Symbols folder
+.alpackages/
+#Snapshots folder
+.snapshots/
+#Testing Output folder
+.output/
+#Extension App-file
+*.app
+#Rapid Application Development File
+rad.json
+#Translation Base-file
+*.g.xlf
+#License-files
+*.bclicense
+*.flf
+#Test results file
+TestResults.xml
+
+# Model weights and checkpoints
+pretrained_weights/
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+
+# Data assets and serialized model files
+data/*.tar
+data/*.pkl
+data/*.npz
+data/*.npy
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Large generated data files
+*.jsonl
+*.json
+
+#ignore DECA
+DECA/
+
+#ignore wandb
+wandb/
+
+#ignore checkpoints
+checkpoints/
+
+# Generated DECA parameters
+/deca_params/
+
+# Generated outputs and local model downloads
+output_stage*/
+/models/
+
+#ignore pytorch3D
+pytorch3d/
+
+#ignore jsonl
+*.jsonl

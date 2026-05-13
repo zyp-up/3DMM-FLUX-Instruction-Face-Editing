@@ -1,0 +1,95 @@
+seed: 42
+
+data:
+  sources:
+    - jsonl: ./v1_pairs_with_instructions.jsonl
+      src_root: ./data/final_data_v1_bucket_postprocessed
+      params_root: ./deca_params/v1
+    - jsonl: ./raf_pairs_with_instructions.jsonl
+      src_root: ./data/final_data_raf_bucket_postprocessed
+      params_root: ./deca_params/raf
+  deca_image_size: 224
+  crop_scale: 1.25
+  pre_size: 256
+  prompt_key_en: instruction_en
+  prompt_key_cn: instruction_cn
+  lang_prob_en: 0.5
+  use_fan: true
+  num_workers: 8
+  max_text_length: 64
+  pin_memory: true
+  persistent_workers: true
+  # true: 对 DECA 控制图 (rendered/normal/albedo) 调用 alpha_images 做 mask, 背景置 0;
+  # false: 保留原图背景 (会带入头发/衣服等非几何信息)。
+  use_alpha_mask: true
+
+stage1:
+  ckpt_path: ./checkpoints/stage1/stage1-20260510-214833/best-step-2320.pt
+
+stage2:
+  resume_path: null
+  # true: flow loss 只训练 CMM，Stage1 仍由 aux loss 训练；显著降低 DECA renderer 反传显存。
+  # false: 保留 flow loss -> DECA renderer -> Stage1 的端到端反传，显存占用更高。
+  detach_deca_control: true
+
+deca:
+  data_dir: ./data
+
+flux:
+  model_path: ./models/FLUX.2-klein-4B
+  torch_dtype: bf16
+  # 注: FLUX.2-klein-base 是非蒸馏模型 (transformer.config.guidance_embeds=False),
+  # 训练和推理时 transformer 都必须传 guidance=None；条件控制由 RCG + CMM 完成。
+
+model:
+  control_mixer_hidden_dim: 512
+  control_mixer_heads: 8
+  control_joint_dim: 128  # FLUX packed latent/noise token dim, concat 到 hidden_states 侧
+  control_dropout: 0.0
+
+loss:
+  lambda_flow: 1.0
+  lambda_aux: 0.1
+  lambda_psi: 1.0
+  lambda_jaw: 10.0
+  lambda_reg_psi: 1.0e-4
+  lambda_reg_jaw_roll: 100.0
+  lambda_reg_jaw_close: 10.0
+
+train:
+  epochs: 2
+  batch_size: 1
+  val_ratio: 0.01
+  val_split_seed: 42
+  
+  lr_cmm: 1.0e-5
+  lr_stage1: 5.0e-6
+  weight_decay: 1.0e-2
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  warmup_ratio: 0.05
+  grad_clip: 1.0
+  log_every: 1
+  val_every_steps: 100
+  val_every_epoch: null
+  use_amp: true
+  amp_dtype: bf16
+  gradient_checkpointing: true
+  max_steps: null
+
+logging:
+  wandb_project: controlface-stage2
+  wandb_run_name: null
+  wandb_entity: zyp_up
+  wandb_mode: online
+  wandb_api_key: null  # 可在本地填写 wandb API key；更推荐使用环境变量 WANDB_API_KEY，提交前不要写入真实密钥
+
+ckpt:
+  out_dir: ./checkpoints/stage2
+  save_every_steps: null
+  save_every_epoch: null
+  save_total_limit: 3
+  save_last: true
+  save_best_only: true
+  best_metric: val/total
+  best_mode: min

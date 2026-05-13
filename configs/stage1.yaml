@@ -1,0 +1,110 @@
+# ===========================================================================
+# Stage1 训练配置 - Conditional DECA Encoder 监督预训练
+# ===========================================================================
+#
+# 用法:
+#   torchrun --standalone --nproc_per_node=8 train_stage1.py \
+#       --config configs/stage1.yaml
+#
+# 任何字段都可以通过 CLI 覆盖:
+#   --opts train.lr=5e-5 data.batch_size=16
+# ===========================================================================
+
+seed: 42                          # 全局随机种子，控制 numpy/torch/random，保证可复现
+
+# ---------------------------------------------------------------------------
+# 数据: 支持多 jsonl 合并, 每项独立的 src_root / params_root
+# ---------------------------------------------------------------------------
+data:
+  sources:                        # 数据源列表，可包含多个 jsonl，训练时自动合并
+    - jsonl: ./v1_pairs_with_instructions.jsonl                                           # 单条 jsonl 文件路径（每行一条样本）
+      src_root: ./data/final_data_v1_bucket_postprocessed                                  # jsonl 中 image_*_path 的根目录
+      params_root: ./deca_params/v1                                                        # image_b 对应的 DECA .pt 参数根目录
+    - jsonl: ./raf_pairs_with_instructions.jsonl
+      src_root: ./data/final_data_raf_bucket_postprocessed
+      params_root: ./deca_params/raf
+
+  image_size: 224       # DECA ResNet50 输入边长（crop 产出尺寸），官方默认 224
+  crop_scale: 1.25      # FAN bbox 扩张系数（含更多背景），官方默认 1.25
+  pre_size: 256         # 预 resize 边长（与 extract_deca_params.py --image_size=256 对齐）
+  prompt_key_en: instruction_en   # jsonl 中英文指令字段名（值为 list，随机抽 1 条）
+  prompt_key_cn: instruction_cn   # jsonl 中中文指令字段名（值为 list，随机抽 1 条）
+  lang_prob_en: 0.5               # 伯努利抽英文概率（0.5 表示中英各半）
+  use_fan: true                   # 是否启用 FAN 人脸检测 crop，false 时走整图 bbox 兑底
+
+  num_workers: 8                  # 每个 rank 的 DataLoader worker 数
+  max_text_length: 64             # tokenizer 最大 token 长度，超过截断
+  pin_memory: true                # 开启 pinned memory，加速 host->device 拷贝
+  persistent_workers: true        # epoch 之间复用 worker，避免重复 fork、减少 warning 刷屏
+
+# ---------------------------------------------------------------------------
+# 模型: 与 ConditionalDECAEncoder.__init__ 参数一一对应
+# ---------------------------------------------------------------------------
+model:
+  # Qwen3 text encoder 权重目录 (只含 safetensors + config.json, 没有 tokenizer 文件)
+  text_encoder_path: ./models/FLUX.2-klein-4B/text_encoder  # Qwen3 文本编码器权重目录；请下载 black-forest-labs/FLUX.2-klein-4B 后按此相对目录放置
+  # Qwen3 tokenizer 目录 (含 tokenizer.json / vocab.json / merges.txt 等)
+  tokenizer_path: ./models/FLUX.2-klein-4B/tokenizer       # Qwen3 tokenizer 目录
+  deca_model_tar: ./data/deca_model.tar   # DECA ResNet50 预训权重（官方 .tar）
+  feature_dim: 2048                       # DECA ResNet50 输出特征维度（不建议改）
+  text_hidden_size: 7680                  # FLUX.2 Klein prompt_embeds: concat Qwen3 layers 9/18/27 (=3×2560)
+  text_encoder_out_layers: [9, 18, 27]    # 与 FLUX.2 Klein 官方 encode_prompt 默认层完全一致
+  num_attn_heads: 8                       # cross-attention 头数
+  reg_hidden: 1024                        # 回归头 MLP 隐藏维度
+  psi_dim: 50                             # 表情参数 ψ 维度（DECA exp 前 50 维）
+  jaw_dim: 3                              # 下黔 jaw 参数维度（pose[3:6]，pitch/yaw/roll）
+  freeze_backbone: false                  # 是否冻结 ResNet50 骨干，当前可训
+  freeze_text_encoder: true               # 是否冻结 Qwen3，默认冻结（省显存）
+  text_encoder_dtype: bf16                # Qwen3 推理精度：bf16 / fp16 / fp32
+
+# ---------------------------------------------------------------------------
+# Loss 权重: 与 Stage1LossWeights 字段一一对应
+# ---------------------------------------------------------------------------
+loss:
+  lambda_psi: 1.0                 # ψ(表情) MSE 损失权重
+  lambda_jaw: 10.0                # jaw MSE 损失权重（jaw 数值小，故权重括大）
+  lambda_reg_psi: 1.0e-4          # ψ L2 正则，抑制数值爆炸
+  lambda_reg_jaw_roll: 100.0      # jaw roll 方向额外正则（限制侧向偏转）
+
+# ---------------------------------------------------------------------------
+# 训练: 优化器 / 调度器 / 总 epoch / batch / val 划分 / 日志
+# ---------------------------------------------------------------------------
+train:
+  epochs: 10                      # 总训练 epoch 数
+  batch_size: 32                  # 每张 GPU 的 batch size（8 卡 DDP 则全局 = 8×batch）
+  val_ratio: 0.01                 # 验证集占比（从合并后的数据集里随机切）
+  val_split_seed: 42              # train/val 划分随机种子（与 seed 解耦，保证划分固定）
+
+  lr: 1.0e-4                      # AdamW 初始学习率
+  weight_decay: 1.0e-2            # AdamW 权重衰减系数
+  betas: [0.9, 0.999]             # AdamW 的 (β₁, β₂)，控制动量估计
+  eps: 1.0e-8                     # AdamW 数值稳定项
+  warmup_ratio: 0.05              # linear warmup 占总步比例（5%）
+  grad_clip: 1.0                  # 梯度裁剪 max_norm，防梯度爆炸
+  log_every: 1                    # 每多少个 global_step 打一条 per-step 日志
+  val_every_steps: 20            # 每多少个 global_step 跑一次验证集（0 / null 表示关闭）
+                                  # 注意：验证后若 ckpt.save_best_only=true 且本次指标优于历史最优，会额外保存一份 best-step-{step}.pt（旧 best 会被删）。与 save_every_steps 独立，不是替代。
+  val_every_epoch: null              # 每多少个 epoch 再跑一次验证集（0 / null 表示关闭，可与 val_every_steps 共存；best ckpt 保存逻辑同上）
+  use_amp: true                   # 是否启用 AMP 混精度训练
+  amp_dtype: bf16                 # AMP 精度类型：bf16 / fp16 / fp32
+
+# ---------------------------------------------------------------------------
+# 日志 & checkpoint
+# ---------------------------------------------------------------------------
+logging:
+  wandb_project: controlface-stage1   # wandb 项目名
+  wandb_run_name: null                # run 名；null 会自动生成带时间戳名字
+  wandb_entity: zyp_up                # wandb entity（个人/team）
+  wandb_mode: online                  # online / offline / disabled
+  wandb_api_key: null                 # 可在本地填写 wandb API key；更推荐使用环境变量 WANDB_API_KEY，提交前不要写入真实密钥
+
+ckpt:
+  out_dir: ./checkpoints/stage1       # checkpoint 根目录；实际运行时会自动拼接 run_name/时间戳子目录避免覆盖
+  save_every_steps: null               # 每多少个 global_step 无条件存一份周期性 step-{N}.pt（0 / null 表示关闭）
+                                       # 注意：仅控制周期性快照，与 val_every_steps 触发的 best ckpt 互不影响。null 时仅依靠 best-step-*.pt + last.pt。
+  save_every_epoch: null                 # 每多少个 epoch 强制存一份 epoch-{N}.pt（0 / null 表示关闭）
+  save_total_limit: 3                 # step 级 ckpt 最多保留多少份（溢出后删掉最早的；null 表示不限）
+  save_last: true                     # 是否在训练结束和每次 save 时额外写一份 last.pt（resume 用）
+  save_best_only: true                # 指标变好时保存为唯一的 best-step-{step}.pt；新 best 会删除旧的 best-step-*
+  best_metric: val/total              # 用哪个 metric 决定最优（定义与 wandb log key 一致）
+  best_mode: min                      # min / max，metric 越小/越大越好
