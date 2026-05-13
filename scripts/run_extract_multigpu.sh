@@ -25,12 +25,12 @@ EXTRACT_TAG="${EXTRACT_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 # ====== 数据集列表 (src -> out 按下标一一对应) ======
 SRC_ROOTS=(
-    "./data/final_data_raf_bucket_postprocessed"
-    "./data/final_data_v1_bucket_postprocessed"
+    "./face_emoji/final_data_raf_bucket_postprocessed"
+    "./face_emoji/final_data_v1_bucket_postprocessed"
 )
 OUT_ROOTS=(
-    "${PROJECT_ROOT}/deca_params/raf"
-    "${PROJECT_ROOT}/deca_params/v1"
+    "${PROJECT_ROOT}/face_emoji/deca_params/raf"
+    "${PROJECT_ROOT}/face_emoji/deca_params/v1"
 )
 
 if [[ "${#SRC_ROOTS[@]}" -ne "${#OUT_ROOTS[@]}" ]]; then

@@ -367,10 +367,10 @@ def build_collate_fn(tokenizer, max_length: int = 64):
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--jsonl", default="./v1_pairs_with_instructions.jsonl")
+    p.add_argument("--jsonl", default="./face_emoji/v1_pairs_with_instructions.jsonl")
     p.add_argument("--src_root",
-                   default="./data/final_data_v1_bucket_postprocessed")
-    p.add_argument("--params_root", default="./deca_params/v1")
+                   default="./face_emoji/final_data_v1_bucket_postprocessed")
+    p.add_argument("--params_root", default="./face_emoji/deca_params/v1")
     p.add_argument("--n", type=int, default=3)
     args = p.parse_args()
 

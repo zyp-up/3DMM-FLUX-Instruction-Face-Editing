@@ -5,10 +5,10 @@
 完整启动命令 (单卡, 同时跑 raf + v1 两个数据集)
 =============================================================================
 python scripts/extract_deca_params.py \
-    --src_root ./data/final_data_raf_bucket_postprocessed \
-    --out_root ./deca_params/raf \
-    --src_root ./data/final_data_v1_bucket_postprocessed \
-    --out_root ./deca_params/v1 \
+    --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
+    --out_root ./face_emoji/deca_params/raf \
+    --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
+    --out_root ./face_emoji/deca_params/v1 \
     --batch_size 32 --num_workers 16
 
 =============================================================================
@@ -17,10 +17,10 @@ python scripts/extract_deca_params.py \
 for r in 0 1 2 3 4 5 6 7; do \
     CUDA_VISIBLE_DEVICES=$r \
     nohup python scripts/extract_deca_params.py \
-        --src_root ./data/final_data_raf_bucket_postprocessed \
-        --out_root ./deca_params/raf \
-        --src_root ./data/final_data_v1_bucket_postprocessed \
-        --out_root ./deca_params/v1 \
+        --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
+        --out_root ./face_emoji/deca_params/raf \
+        --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
+        --out_root ./face_emoji/deca_params/v1 \
         --shard_id $r --num_shards 8 \
         --batch_size 32 --num_workers 16 \
         > logs/extract_shard_$r.log 2>&1 & \
@@ -37,7 +37,7 @@ done; wait
      {src_root}/<rel>/name.JPG  =>  {out_root}/<rel>/name.pt
    例:
      .../final_data_raf_bucket_postprocessed/544x736/angry/raf_xxx.jpg
-     .../ControlFace-main/deca_params/raf/544x736/angry/raf_xxx.pt
+     .../ControlFace-main/face_emoji/deca_params/raf/544x736/angry/raf_xxx.pt
    .pt 内容: dict(shape, tex, exp, pose, cam, light, detail, tform, src_image_path).
 5) 失败样本写入 {out_root}/_failed_shard{shard_id}.jsonl (不中断整体流程;
    多卡跑完后可用 cat _failed_shard*.jsonl > _failed.jsonl 合并).

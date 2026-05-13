@@ -113,27 +113,52 @@ hf download black-forest-labs/FLUX.2-klein-base-4B \
 
 ## 2. 数据准备
 
-本仓库的训练样本是 **(参考图 A, 目标图 B, 文本指令)** 三元组。下面 5 步从「原始公开表情数据集」生成训练所需的 `*_pairs_with_instructions.jsonl` 与 `deca_params/*.pt`。
+本仓库的训练样本是 **(参考图 A, 目标图 B, 文本指令)** 三元组。你可以直接使用我们在 Hugging Face 上发布的预处理版本，其中已经包含图像、`*_pairs_with_instructions.jsonl` 和预提取的 `deca_params/*.pt`；也可以使用自己的数据集，并按 2.2–2.5 的流程重新生成 jsonl、指令与 DECA 参数。
 
-### 2.1 下载图像数据集 (FacePairEmoji)
+### 2.1 下载预处理数据集 (FacePairEmoji)
 
-图像数据已上传到 HuggingFace：[`yunpengZhangup/FacePairEmoji`](https://huggingface.co/datasets/yunpengZhangup/FacePairEmoji)。
+预处理数据已上传到 Hugging Face：[`yunpengZhangup/FacePairEmoji`](https://huggingface.co/datasets/yunpengZhangup/FacePairEmoji)。仓库中包含：
+
+- `final_data_raf_bucket_postprocessed/`：RAF-DB 分桶后图像。
+- `final_data_v1_bucket_postprocessed/`：KDEF / Multi-PIE / Oulu 等合集分桶后图像。
+- `raf_pairs_with_instructions.jsonl` 与 `v1_pairs_with_instructions.jsonl`：已质检并生成中英文指令的训练配对。
+- `deca_params/`：与图像目录镜像对齐的预提取 DECA 参数。
 
 ```bash
 hf download yunpengZhangup/FacePairEmoji --repo-type=dataset \
     --local-dir ./face_emoji
 ```
 
-下载后建议得到如下两个根目录（路径名与本仓库 yaml 默认值对齐，强烈建议保持）：
+下载后目录应与本仓库默认配置对齐：
 
 ```
 ./face_emoji/
+├── raf_pairs_with_instructions.jsonl
+├── v1_pairs_with_instructions.jsonl
+├── deca_params/
+│   ├── raf/
+│   └── v1/
 ├── final_data_raf_bucket_postprocessed/    # RAF-DB 经分桶 + 后处理
 │   ├── 416x624/{neutral,angry,disgust,fear,happy,sad,surprise}/raf_xxx.png
 │   └── 1040x1568/...
 └── final_data_v1_bucket_postprocessed/     # KDEF / Multi-PIE / Oulu 等合集
     └── 544x736/{neutral,angry,...}/{kdef|multi_pie|oulu}_xxx.JPG
 ```
+
+本仓库的 `configs/stage1.yaml` 与 `configs/stage2.yaml` 已默认指向上述相对路径。如果直接使用预处理数据，通常只需下载数据后开始训练；但正式训练时更推荐将 `data.sources[*].jsonl`、`data.sources[*].src_root`、`data.sources[*].params_root` 统一改成绝对路径，避免从不同工作目录启动脚本时出现 `os.path.relpath` 前缀不一致的问题。例如：
+
+```yaml
+data:
+  sources:
+    - jsonl: /abs/path/to/ControlFace-main/face_emoji/v1_pairs_with_instructions.jsonl
+      src_root: /abs/path/to/ControlFace-main/face_emoji/final_data_v1_bucket_postprocessed
+      params_root: /abs/path/to/ControlFace-main/face_emoji/deca_params/v1
+    - jsonl: /abs/path/to/ControlFace-main/face_emoji/raf_pairs_with_instructions.jsonl
+      src_root: /abs/path/to/ControlFace-main/face_emoji/final_data_raf_bucket_postprocessed
+      params_root: /abs/path/to/ControlFace-main/face_emoji/deca_params/raf
+```
+
+注意：`jsonl` 中的 `image_a_path` / `image_b_path` 与 yaml 中的 `src_root` 必须使用同一种根目录写法。若你把 yaml 改成绝对路径，也建议同步将 jsonl 中的图像路径改成绝对路径；否则训练侧根据 `image_path -> params_root` 映射 `.pt` 时可能找不到对应的 DECA 参数。
 
 命名约定（决定后续 `extract_person_id` 行为）：
 
@@ -144,7 +169,7 @@ hf download yunpengZhangup/FacePairEmoji --repo-type=dataset \
 | `oulu_*` | Oulu-CASIA | 取下划线分割的第 1 段 |
 | `multi_pie_*` | Multi-PIE | 取下划线分割的第 2 段 |
 
-如果你使用自建数据集，只需按上面格式组织：`<root>/<bucket>/<expression>/<prefix>_<id>.<ext>`，并在 `scripts/generate_pairs_jsonl.py:extract_person_id` 中扩展前缀解析即可。
+如果你使用自建数据集，只需按上面格式组织：`<root>/<bucket>/<expression>/<prefix>_<id>.<ext>`，并在 `scripts/generate_pairs_jsonl.py:extract_person_id` 中扩展前缀解析，然后继续执行下面的数据准备流程。
 
 ### 2.2 生成表情配对 jsonl
 
@@ -166,17 +191,17 @@ python scripts/generate_pairs_jsonl.py \
 {
   "pair_id": "kdef_F02_surprise_neutral", 
   "person_id": "kdef_F02", "dataset": "kdef", 
-  "image_a_path": "./face_emoji/final_data_v1_bucket_postprocessed/surprise/kdef_AF02SUS.JPG", 
+  "image_a_path": "./face_emoji/final_data_v1_bucket_postprocessed/544x736/surprise/kdef_AF02SUS.JPG", 
   "image_a_filename": "kdef_AF02SUS.JPG", 
   "expression_a": "surprise", 
-  "image_b_path": "./face_emoji/final_data_v1_bucket_postprocessed/neutral/kdef_AF02NES.JPG", 
+  "image_b_path": "./face_emoji/final_data_v1_bucket_postprocessed/544x736/neutral/kdef_AF02NES.JPG", 
   "image_b_filename": "kdef_AF02NES.JPG", 
   "expression_b": "neutral",
   "check_result": null
 }
 ```
 
-> ⚠️ `image_*_path` 与 yaml 中 `data.sources[*].src_root` 必须使用同一种根目录写法。开源配置默认使用相对路径；如果你在本地改成绝对路径，请保持 jsonl 与 yaml 前缀一致，否则训练侧 `os.path.relpath(image_path, src_root)` 无法正确定位 `.pt` 参数。
+> 如果你直接使用 Hugging Face 上的 `*_pairs_with_instructions.jsonl`，可以跳过 2.2 和 2.3；只有在准备自己的数据集或重新生成配对时才需要执行下面两步。
 
 ### 2.3 大模型质量过滤 + 指令生成
 
@@ -195,10 +220,10 @@ python scripts/generate_pairs_jsonl.py \
   "pair_id": "kdef_F02_surprise_neutral", 
   "person_id": "kdef_F02", 
   "dataset": "kdef", 
-  "image_a_path": "./data/final_data_v1_bucket_postprocessed/544x736/surprise/kdef_AF02SUS.JPG", 
+  "image_a_path": "./face_emoji/final_data_v1_bucket_postprocessed/544x736/surprise/kdef_AF02SUS.JPG", 
   "image_a_filename": "kdef_AF02SUS.JPG", 
   "expression_a": "surprise", 
-  "image_b_path": "./data/final_data_v1_bucket_postprocessed/544x736/neutral/kdef_AF02NES.JPG", 
+  "image_b_path": "./face_emoji/final_data_v1_bucket_postprocessed/544x736/neutral/kdef_AF02NES.JPG", 
   "image_b_filename": "kdef_AF02NES.JPG", 
   "expression_b": "neutral", 
   "check_result": {
@@ -225,9 +250,9 @@ python scripts/generate_pairs_jsonl.py \
 ```bash
 python scripts/extract_deca_params.py \
     --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
-    --out_root ./deca_params/raf \
+    --out_root ./face_emoji/deca_params/raf \
     --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
-    --out_root ./deca_params/v1 \
+    --out_root ./face_emoji/deca_params/v1 \
     --batch_size 32 --num_workers 16
 ```
 **多卡分片（推荐）：**
@@ -240,7 +265,7 @@ python scripts/extract_deca_params.py \
 ```
 ./face_emoji/final_data_raf_bucket_postprocessed/544x736/angry/raf_xxx.jpg
   ↓
-./deca_params/raf/544x736/angry/raf_xxx.pt   # dict(shape, tex, exp, pose, cam, light, detail, tform)
+./face_emoji/deca_params/raf/544x736/angry/raf_xxx.pt   # dict(shape, tex, exp, pose, cam, light, detail, tform)
 ```
 
 断点续跑：脚本会自动跳过已存在的 `.pt`，多卡互相不重叠。失败样本写入 `{out_root}/_failed_shard{i}.jsonl`。
@@ -250,9 +275,9 @@ python scripts/extract_deca_params.py \
 ```bash
 python scripts/verify_deca_params.py \
     --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
-    --out_root ./deca_params/raf \
+    --out_root ./face_emoji/deca_params/raf \
     --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
-    --out_root ./deca_params/v1 \
+    --out_root ./face_emoji/deca_params/v1 \
     --deep_check
 ```
 
@@ -442,9 +467,12 @@ ControlFace-main/
 │   └── infer_stage2.yaml          # Stage2 推理配置
 ├── data/                          # DECA 静态资产 (head_template.obj / mask 等)
 ├── decalib/                       # DECA 官方代码 (encoder / FLAME / renderer)
-├── deca_params/                   # 离线提取的 .pt (步骤 2.4 产物)
-│   ├── raf/<bucket>/<expr>/*.pt
-│   └── v1/<bucket>/<expr>/*.pt
+├── face_emoji/                    # Hugging Face 下载的数据目录 (默认不纳入 git)
+│   ├── raf_pairs_with_instructions.jsonl
+│   ├── v1_pairs_with_instructions.jsonl
+│   ├── final_data_raf_bucket_postprocessed/
+│   ├── final_data_v1_bucket_postprocessed/
+│   └── deca_params/{raf,v1}/<bucket>/<expr>/*.pt
 ├── infer/
 │   ├── infer_stage1.py            # 控制图可视化
 │   └── infer_stage2.py            # 端到端表情编辑
@@ -461,8 +489,6 @@ ControlFace-main/
 ├── train/
 │   ├── train_stage1.{py,sh}
 │   └── train_stage2.{py,sh}
-├── raf_pairs_with_instructions.jsonl   # 步骤 2.3 产物
-├── v1_pairs_with_instructions.jsonl    # 步骤 2.3 产物
 ├── requirements.txt
 ├── set_env.sh                     # 一键安装
 └── README.md
@@ -547,31 +573,56 @@ Required pretrained assets:
 
 ## 2. Data Preparation
 
-The expected FacePairEmoji layout is:
+The released FacePairEmoji dataset is available at [`yunpengZhangup/FacePairEmoji`](https://huggingface.co/datasets/yunpengZhangup/FacePairEmoji). It contains the processed image folders, instruction jsonl files, and pre-extracted DECA parameters, so you can train directly without regenerating the metadata or DECA features:
 
-```text
-FacePairEmoji/
-  RAF-DB/
-    train/Angry/*.png
-    train/Disgust/*.png
-    ...
-  v1/
-    256*256/angry/*.png
-    448*592/sad/*.png
-    ...
+```bash
+hf download yunpengZhangup/FacePairEmoji --repo-type=dataset \
+  --local-dir ./face_emoji
 ```
 
-Generate expression-pair metadata:
+The downloaded directory should follow this layout:
+
+```text
+face_emoji/
+  raf_pairs_with_instructions.jsonl
+  v1_pairs_with_instructions.jsonl
+  deca_params/
+    raf/
+    v1/
+  final_data_raf_bucket_postprocessed/
+  final_data_v1_bucket_postprocessed/
+```
+
+The default `configs/stage1.yaml` and `configs/stage2.yaml` point to this `./face_emoji/...` layout. For full training runs, absolute paths are recommended for `data.sources[*].jsonl`, `data.sources[*].src_root`, and `data.sources[*].params_root`, especially when launching jobs from different working directories:
+
+```yaml
+data:
+  sources:
+    - jsonl: /abs/path/to/ControlFace-main/face_emoji/v1_pairs_with_instructions.jsonl
+      src_root: /abs/path/to/ControlFace-main/face_emoji/final_data_v1_bucket_postprocessed
+      params_root: /abs/path/to/ControlFace-main/face_emoji/deca_params/v1
+    - jsonl: /abs/path/to/ControlFace-main/face_emoji/raf_pairs_with_instructions.jsonl
+      src_root: /abs/path/to/ControlFace-main/face_emoji/final_data_raf_bucket_postprocessed
+      params_root: /abs/path/to/ControlFace-main/face_emoji/deca_params/raf
+```
+
+The image paths stored in the jsonl files and the `src_root` values in the yaml files must use the same root convention. If you convert yaml paths to absolute paths, it is safer to convert `image_a_path` and `image_b_path` in the jsonl files to absolute paths as well; otherwise the dataset loader may fail to map an image path to the corresponding `.pt` file under `params_root`.
+
+If you want to use your own dataset, organize it as `<root>/<bucket>/<expression>/<prefix>_<id>.<ext>`, then generate expression-pair metadata:
 
 ```bash
 python scripts/generate_pairs_jsonl.py \
-  --root ./FacePairEmoji/RAF-DB \
-  --out ./raf_pairs.jsonl
+  --data_dir ./face_emoji/final_data_raf_bucket_postprocessed \
+  --output ./raf_pairs.jsonl
+
+python scripts/generate_pairs_jsonl.py \
+  --data_dir ./face_emoji/final_data_v1_bucket_postprocessed \
+  --output ./v1_pairs.jsonl
 ```
 
 The quality-filtering and instruction-generation stage is released as prompt templates under `prompts/`. API credentials and vendor-specific request code are intentionally not stored in this repository; connect the templates to your preferred multimodal or text LLM provider when reproducing this step.
 
-Offline DECA parameters are extracted before training:
+If you do not use the released pre-extracted DECA parameters, extract them offline before training:
 
 ```bash
 bash scripts/run_extract_multigpu.sh
@@ -581,9 +632,10 @@ Verify the extracted parameters:
 
 ```bash
 python scripts/verify_deca_params.py \
-  --img_root ./FacePairEmoji \
-  --params_root ./deca_params \
-  --report_dir ./verify_report \
+  --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
+  --out_root ./face_emoji/deca_params/raf \
+  --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
+  --out_root ./face_emoji/deca_params/v1 \
   --deep_check
 ```
 

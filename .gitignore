@@ -61,6 +61,7 @@ checkpoints/
 
 # Generated DECA parameters
 /deca_params/
+/face_emoji/
 
 # Generated outputs and local model downloads
 output_stage*/

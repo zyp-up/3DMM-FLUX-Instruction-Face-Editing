@@ -17,12 +17,12 @@ seed: 42                          # 全局随机种子，控制 numpy/torch/rand
 # ---------------------------------------------------------------------------
 data:
   sources:                        # 数据源列表，可包含多个 jsonl，训练时自动合并
-    - jsonl: ./v1_pairs_with_instructions.jsonl                                           # 单条 jsonl 文件路径（每行一条样本）
-      src_root: ./data/final_data_v1_bucket_postprocessed                                  # jsonl 中 image_*_path 的根目录
-      params_root: ./deca_params/v1                                                        # image_b 对应的 DECA .pt 参数根目录
-    - jsonl: ./raf_pairs_with_instructions.jsonl
-      src_root: ./data/final_data_raf_bucket_postprocessed
-      params_root: ./deca_params/raf
+    - jsonl: ./face_emoji/v1_pairs_with_instructions.jsonl                                 # 单条 jsonl 文件路径（每行一条样本）
+      src_root: ./face_emoji/final_data_v1_bucket_postprocessed                            # jsonl 中 image_*_path 的根目录；正式训练建议改成绝对路径
+      params_root: ./face_emoji/deca_params/v1                                             # image_b 对应的 DECA .pt 参数根目录；正式训练建议改成绝对路径
+    - jsonl: ./face_emoji/raf_pairs_with_instructions.jsonl
+      src_root: ./face_emoji/final_data_raf_bucket_postprocessed
+      params_root: ./face_emoji/deca_params/raf
 
   image_size: 224       # DECA ResNet50 输入边长（crop 产出尺寸），官方默认 224
   crop_scale: 1.25      # FAN bbox 扩张系数（含更多背景），官方默认 1.25

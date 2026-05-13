@@ -2,12 +2,12 @@ seed: 42
 
 data:
   sources:
-    - jsonl: ./v1_pairs_with_instructions.jsonl
-      src_root: ./data/final_data_v1_bucket_postprocessed
-      params_root: ./deca_params/v1
-    - jsonl: ./raf_pairs_with_instructions.jsonl
-      src_root: ./data/final_data_raf_bucket_postprocessed
-      params_root: ./deca_params/raf
+    - jsonl: ./face_emoji/v1_pairs_with_instructions.jsonl
+      src_root: ./face_emoji/final_data_v1_bucket_postprocessed
+      params_root: ./face_emoji/deca_params/v1
+    - jsonl: ./face_emoji/raf_pairs_with_instructions.jsonl
+      src_root: ./face_emoji/final_data_raf_bucket_postprocessed
+      params_root: ./face_emoji/deca_params/raf
   deca_image_size: 224
   crop_scale: 1.25
   pre_size: 256

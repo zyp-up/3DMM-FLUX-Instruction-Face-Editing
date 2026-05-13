@@ -4,16 +4,16 @@ DECA 参数提取完整性校验工具。
 用法:
     python scripts/verify_deca_params.py \
         --src_root /.../final_data_raf_bucket_postprocessed \
-        --out_root /.../deca_params/raf
+        --out_root /.../face_emoji/deca_params/raf
 
 支持与 extract 一样的多 (src,out) 对同时校验:
     --src_root A --out_root A_out --src_root B --out_root B_out
 
 nohup python scripts/verify_deca_params.py \
-    --src_root ./data/final_data_raf_bucket_postprocessed \
-    --out_root ./deca_params/raf \
-    --src_root ./data/final_data_v1_bucket_postprocessed \
-    --out_root ./deca_params/v1 \
+    --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
+    --out_root ./face_emoji/deca_params/raf \
+    --src_root ./face_emoji/final_data_v1_bucket_postprocessed \
+    --out_root ./face_emoji/deca_params/v1 \
     --deep_check \
     > verify_deep.log 2>&1 &
 
