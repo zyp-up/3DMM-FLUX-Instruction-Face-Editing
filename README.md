@@ -1,13 +1,34 @@
 <p align="center">
-  <h1 align="center">ControlFace × FLUX.2: Text-Driven Facial Expression Editing</h1>
-  <h3 align="center">基于 DECA 几何控制 + FLUX.2-klein 流匹配的人脸表情编辑</h3>
-  <p align="center">本仓库基于 <a href="https://github.com/cvlab-kaist/ControlFace">ControlFace (CVPR 2025)</a> 的思想，将其控制范式迁移到 <b>FLUX.2-klein-base</b> 之上，并使用自建的 <b>FacePairEmoji</b> 表情配对数据集做端到端训练。</p>
+  <h1 align="center">3DMM-FLUX: Instruction-Guided Facial Expression Editing</h1>
+  <h3 align="center">基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架</h3>
+  <p align="center"><b>DECA/3DMM 参数控制</b> × <b>FLUX.2-klein 流匹配生成</b> × <b>中英文指令驱动表情编辑</b></p>
 </p>
 
-<!-- demo-gallery-start -->
-## 样例结果
+<p align="center">
+  <a href="#中文">中文</a> | <a href="#english">English</a>
+</p>
 
-下表的行和列使用同一表情顺序：`Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise`。每一行对应同一个输入身份，左侧仅标注该样例的原始分辨率；浅黄色对角线单元格是原始输入图，其他单元格直接引用 `demo_output/` 中的原始生成结果，并用嵌套表格展示四图对比：上排是本方法 `Control-CN / Control-EN`，下排是原始 FLUX.2 基线 `OG-CN / OG-EN`。
+<a id="中文"></a>
+
+## 中文
+
+### 摘要
+
+本项目实现了一套基于 3DMM 参数化表征与 FLUX 扩散模型的指令驱动人脸表情编辑框架。给定单张人脸图像与自然语言指令，系统首先利用 DECA/3DMM 显式建模输入人脸的身份几何、姿态与表情参数，再预测目标表情对应的参数化几何控制信号，并将该控制信号注入 FLUX.2-klein 的流匹配生成过程。该设计把可解释的三维人脸先验与高保真生成模型结合起来，在增强目标表情可控性的同时尽量保持原始身份特征一致。
+
+本仓库基于 [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace) 的控制思想、[DECA](https://github.com/yfeng95/DECA) 的 3DMM 参数估计与渲染能力，以及 [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base) 的官方文本编码器和流匹配生成配置完成训练与推理实现。训练数据使用自建的 FacePairEmoji 表情配对数据集，并支持中文与英文编辑指令。
+
+### 主要特点
+
+- **参数化表情控制**：使用 DECA/3DMM 将输入人脸分解为身份、姿态、表情、光照和相机参数，避免仅依赖隐式图像条件。
+- **指令驱动编辑**：支持中文和英文自然语言指令，预测目标表情的 DECA 表情参数与下颌姿态。
+- **FLUX.2 流匹配生成**：将目标与参考 3DMM 控制图编码为控制 token，注入 FLUX.2-klein 生成主干。
+- **身份保持约束**：通过参考控制路径与 RCG 推理策略增强身份一致性，并与原始 FLUX.2 基线进行并列对比。
+
+<!-- demo-gallery-start -->
+### 定性结果
+
+下表以源表情和目标表情构成 7×7 定性对比矩阵，行列均按 `Neutral → Angry → Disgust → Fear → Happy → Sad → Surprise` 排列。每一行对应同一输入身份，左侧仅标注该样例原始分辨率；浅黄色对角线单元格为原始输入图，其余单元格直接引用 `demo_output/` 中的原始生成结果。每个非对角单元格使用嵌套表格展示四图对比：上排为本方法 `Control-CN / Control-EN`，下排为无 3DMM 控制的原始 FLUX.2 基线 `OG-CN / OG-EN`。
 
 <table>
 <tr><th>Resolution</th><th>Neutral</th><th>Angry</th><th>Disgust</th><th>Fear</th><th>Happy</th><th>Sad</th><th>Surprise</th></tr>
@@ -21,8 +42,10 @@
 </table>
 
 <!-- demo-gallery-end -->
-## 目录
-- [样例结果](#样例结果)
+## 中文目录
+- [摘要](#摘要)
+- [主要特点](#主要特点)
+- [定性结果](#定性结果)
 - [1. 环境配置](#1-环境配置)
 - [2. 数据准备](#2-数据准备)
   - [2.1 下载图像数据集 (FacePairEmoji)](#21-下载图像数据集-facepairemoji)
@@ -38,6 +61,7 @@
 - [6. 配置参数说明](#6-配置参数说明)
 - [7. 项目结构](#7-项目结构)
 - [致谢](#致谢)
+- [English](#english)
 
 ---
 
@@ -279,6 +303,7 @@ Stage1 训练一个**文本条件的 DECA 表情/下颌头**：
 ```bash
 # 默认 8 卡 DDP
 bash train/train_stage1.sh
+```
 
 日志写入 `logs/train_stage1/<timestamp>/train.log`，PID 写入同目录 `pid.txt`，停止：`kill $(cat logs/train_stage1/<ts>/pid.txt)`。
 
@@ -313,6 +338,7 @@ Stage2 在 Stage1 基础上联合训练：
 ```bash
 # 默认 8 卡 DDP
 bash train/train_stage2.sh
+```
 
 
 关键配置（详见 yaml）：
@@ -449,7 +475,6 @@ ControlFace-main/
 ├── prompts/check_og_data.txt      # 火山方舟质检 prompt 模板
 ├── scripts/
 │   ├── generate_pairs_jsonl.py    # 步骤 2.2: 生成配对 jsonl
-│   ├── check_faces.py             # 步骤 2.3: 大模型质量过滤 + 指令生成
 │   ├── extract_deca_params.py     # 步骤 2.4: 单卡 DECA 提取
 │   ├── run_extract_multigpu.sh    # 步骤 2.4: 多卡分片
 │   └── verify_deca_params.py      # 步骤 2.5: 完整性校验
@@ -478,3 +503,227 @@ ControlFace-main/
 - [face-alignment (FAN)](https://github.com/1adrianb/face-alignment) – 在线人脸关键点检测
 
 感谢上游作者们开源的工作。
+
+---
+
+<a id="english"></a>
+
+## English
+
+[中文](#中文) | [English](#english)
+
+### Abstract
+
+This repository implements **3DMM-FLUX**, an instruction-guided facial expression editing framework built on parametric 3D face representation and FLUX diffusion/flow matching. Given a single face image and a natural-language instruction, the system first estimates identity-aware geometry, pose, expression, camera, and illumination parameters with DECA/3DMM. It then predicts the target expression parameters, renders expression-aware geometric control signals, and injects them into the FLUX.2-klein flow-matching generation process. The framework combines interpretable 3D facial priors with high-fidelity generative modeling, aiming to improve expression controllability while preserving the input identity.
+
+The implementation follows the control paradigm of [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace), uses [DECA](https://github.com/yfeng95/DECA) for 3DMM parameter estimation and rendering, and adopts the official [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base) configuration, including its paired text encoder. Training is performed on the in-house FacePairEmoji expression-pair dataset with both Chinese and English editing instructions.
+
+### Highlights
+
+- **Parametric expression control**: DECA/3DMM decomposes an input face into identity, pose, expression, illumination, and camera parameters, providing explicit geometric supervision.
+- **Instruction-driven editing**: Chinese and English prompts are encoded with the FLUX.2-klein text encoder and used to predict target DECA expression and jaw-pose parameters.
+- **FLUX.2 flow-matching generation**: Reference and target 3DMM control maps are projected into control tokens and injected into the FLUX.2-klein transformer.
+- **Identity-preserving inference**: Reference-Control Guidance (RCG) strengthens identity consistency and enables direct comparison with the vanilla FLUX.2 baseline.
+
+### Qualitative Results
+
+The qualitative matrix is shared with the Chinese section to avoid duplicating a large set of images in the README. The rows and columns follow the same expression order: `Neutral -> Angry -> Disgust -> Fear -> Happy -> Sad -> Surprise`. Each row corresponds to one input identity, and the left column only reports the original image resolution. The pale-yellow diagonal cells show the input images, while all off-diagonal cells directly reference the original generated results under `demo_output/`. Each off-diagonal cell contains a nested 2×2 comparison: the top row is our controlled model (`Control-CN / Control-EN`), and the bottom row is the vanilla FLUX.2 baseline without 3DMM control (`OG-CN / OG-EN`).
+
+View the matrix here: [Qualitative Results](#定性结果).
+
+### Contents
+
+- [Abstract](#abstract)
+- [Highlights](#highlights)
+- [Qualitative Results](#qualitative-results)
+- [1. Environment](#1-environment)
+- [2. Data Preparation](#2-data-preparation)
+- [3. Stage-1 Training](#3-stage-1-training)
+- [4. Stage-2 Training](#4-stage-2-training)
+- [5. Inference](#5-inference)
+- [6. Configuration Files](#6-configuration-files)
+- [7. Repository Structure](#7-repository-structure)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+### 1. Environment
+
+We recommend the `controlface310` conda environment with CUDA 12.1 and PyTorch 2.5.1:
+
+```bash
+conda create -n controlface310 python=3.10 -y
+conda activate controlface310
+
+pip install --no-cache-dir torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+pip install -U setuptools wheel ninja cmake
+conda install -y -c fvcore -c iopath -c conda-forge fvcore iopath
+conda install -y -c conda-forge mpi4py dlib scikit-learn "scikit-image<0.25" tqdm
+
+pip install -r requirements.txt
+```
+
+The same setup commands are collected in `set_env.sh`:
+
+```bash
+bash set_env.sh
+```
+
+The DECA renderer uses `pytorch3d`. For PyTorch 2.5, installing PyTorch3D from source is recommended:
+
+```bash
+git clone https://github.com/facebookresearch/pytorch3d.git
+cd pytorch3d
+pip install --no-build-isolation -e .
+```
+
+Required pretrained assets:
+
+| Asset | Target path | Note |
+|---|---|---|
+| `deca_model.tar` | `data/deca_model.tar` | DECA pretrained checkpoint |
+| `generic_model.pkl` | `data/generic_model.pkl` | FLAME 2020 model |
+| `FLAME_texture.npz` | `data/FLAME_texture.npz` | FLAME texture space |
+| `head_template.obj`, `uv_face_eye_mask.png`, `fixed_displacement_256.npy`, `mean_texture.jpg` | `data/` | DECA static assets |
+| FLUX.2-klein-base | local `models/FLUX.2-klein-base/` or another configured path | Hugging Face model directory |
+
+### 2. Data Preparation
+
+The expected FacePairEmoji layout is:
+
+```text
+FacePairEmoji/
+  RAF-DB/
+    train/Angry/*.png
+    train/Disgust/*.png
+    ...
+  v1/
+    256*256/angry/*.png
+    448*592/sad/*.png
+    ...
+```
+
+Generate expression-pair metadata:
+
+```bash
+python scripts/generate_pairs_jsonl.py \
+  --root ./FacePairEmoji/RAF-DB \
+  --out ./raf_pairs.jsonl
+```
+
+The quality-filtering and instruction-generation stage is released as prompt templates under `prompts/`. API credentials and vendor-specific request code are intentionally not stored in this repository; connect the templates to your preferred multimodal or text LLM provider when reproducing this step.
+
+Offline DECA parameters are extracted before training:
+
+```bash
+bash scripts/run_extract_multigpu.sh
+```
+
+Verify the extracted parameters:
+
+```bash
+python scripts/verify_deca_params.py \
+  --img_root ./FacePairEmoji \
+  --params_root ./deca_params \
+  --report_dir ./verify_report \
+  --deep_check
+```
+
+### 3. Stage-1 Training
+
+Stage 1 trains a text-conditioned DECA expression encoder:
+
+- Input: reference face image and text instruction.
+- Output: target expression coefficients `exp[:50]` and jaw pose `pose[3:6]`.
+- Supervision: offline DECA parameters extracted from the target image.
+- Text encoder: the official FLUX.2-klein Qwen3 encoder, concatenating hidden states from layers 9, 18, and 27.
+
+Configuration: [`configs/stage1.yaml`](configs/stage1.yaml)
+
+```bash
+bash train/train_stage1.sh
+```
+
+The best checkpoint is saved under `checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt`.
+
+### 4. Stage-2 Training
+
+Stage 2 jointly trains the FLUX.2 control pathway:
+
+1. Stage 1 predicts target DECA expression and jaw parameters.
+2. DECA renders reference and target control maps, including rendered image, normal, and albedo channels.
+3. `Flux2ControlMixer` projects the control maps into tokens and injects them into the FLUX.2 transformer.
+4. Flow-matching loss supervises generation in the FLUX.2 latent space, with an auxiliary Stage-1 loss for expression consistency.
+
+Configuration: [`configs/stage2.yaml`](configs/stage2.yaml)
+
+```bash
+bash train/train_stage2.sh
+```
+
+The resulting checkpoint is saved under `checkpoints/stage2/stage2-<timestamp>/best-step-{N}.pt` and contains `stage1_model`, `control_mixer`, configuration snapshots, and training step metadata.
+
+### 5. Inference
+
+Stage-1 visualization renders the predicted 3DMM control maps:
+
+```bash
+python infer/infer_stage1.py \
+  --config configs/stage1.yaml \
+  --ckpt ./checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt \
+  --image ./demo_input/256*256_surprise/raf_train_10109.png \
+  --prompt "make the person look happy" \
+  --out_dir ./output_stage1_demo
+```
+
+End-to-end FLUX.2 expression editing:
+
+```bash
+python infer/infer_stage2.py \
+  --config configs/infer_stage2.yaml \
+  --image ./demo_input/256*256_surprise/raf_train_10109.png \
+  --prompt "make the person look happy" \
+  --out_dir ./output_stage2_demo
+```
+
+The default output directory contains `final.png`, rendered reference/target control maps, optional intermediate tensors, and `summary.json`.
+
+### 6. Configuration Files
+
+| File | Purpose |
+|---|---|
+| [`configs/stage1.yaml`](configs/stage1.yaml) | Stage-1 data sources, model paths, optimization, losses, and checkpoint policy |
+| [`configs/stage2.yaml`](configs/stage2.yaml) | Stage-2 FLUX.2 control-mixer training and Stage-1 checkpoint binding |
+| [`configs/infer_stage2.yaml`](configs/infer_stage2.yaml) | End-to-end inference, FLUX.2 sampling options, RCG coefficient, and output settings |
+
+All fields can also be overridden from the command line with `--opts key=val`.
+
+### 7. Repository Structure
+
+```text
+ControlFace-main/
+├── configs/              # YAML configs for training and inference
+├── data/                 # DECA static assets
+├── decalib/              # DECA encoder, FLAME, and renderer code
+├── infer/                # Stage-1 and Stage-2 inference scripts
+├── prompts/              # Prompt templates
+├── scripts/              # Data preparation and DECA parameter extraction utilities
+├── src/                  # Datasets, losses, and model modules
+├── train/                # Stage-1 and Stage-2 training entry points
+├── demo_input/           # Example input images used by the README gallery
+├── demo_output/          # Example generated results used by the README gallery
+├── requirements.txt
+├── set_env.sh
+└── README.md
+```
+
+### Acknowledgements
+
+This project builds on the following open-source works:
+
+- [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace)
+- [DECA](https://github.com/yfeng95/DECA) and [DiffusionRig](https://github.com/adobe-research/diffusion-rig)
+- [FLUX.2-klein-base](https://huggingface.co/black-forest-labs/FLUX.2-klein-base)
+- [face-alignment (FAN)](https://github.com/1adrianb/face-alignment)
