@@ -17,11 +17,7 @@ class ConvGNAct(nn.Module):
 
 
 class Flux2ControlMixer(nn.Module):
-    """
-    FLUX.2 适配版 CMM:
-    - 输入: D_T / D_R, 各自 9 通道
-    - 输出: control tokens, 直接拼接到 FLUX2 的 hidden_states/noise tokens 后面
-    """
+    """CMM for FLUX.2: maps 9-channel target/reference controls to tokens."""
     def __init__(
         self,
         hidden_dim: int = 512,

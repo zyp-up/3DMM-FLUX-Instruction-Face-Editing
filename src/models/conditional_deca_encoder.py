@@ -1,22 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Conditional DECA Encoder (Stage1 预训练用)
+"""Conditional DECA Encoder used for Stage1 pretraining.
 
-结构:
-    ResNet50 (DECA 预训练初始化) → image_feat (B, feature_dim)
-        注: 原版 decalib.models.resnet.load_ResNet50Model 输出已经是
-            AdaptiveAvgPool2d + flatten 后的单向量 (B, 2048), 不是 feature map.
-    Qwen3 Text Encoder (冻结)   → text_hidden (B, L, text_hidden_size)
-                                    → Linear → text_kv (B, L, feature_dim)
-    一次 Cross-Attn: Q=image_feat.unsqueeze(1) (B, 1, feature_dim)
-                     KV=text_kv (B, L, feature_dim) → fused (B, feature_dim)
-        (与原版回归头 "吃单向量" 的设计天然对齐, 所以 Q 保持 1 token)
-    原版 DECA 回归头: feature_dim → reg_hidden → (PSI_DIM + JAW_DIM) -> split → psi (B, PSI_DIM), jaw (B, JAW_DIM)
-
-说明:
-  - forward 接口: 模型内置 Qwen3, 调用时只需传 ref_image + input_ids + attention_mask.
-  - Qwen3 参数全程冻结 + bf16 推理; 训练时 set_requires_grad 只覆盖可训练部分.
-  - 回归头结构严格对齐 decalib.models.encoders.ResnetEncoder.layers (Linear+ReLU+Linear).
+The image backbone produces one DECA feature vector, which attends to Qwen3
+prompt features before the DECA-style regression head predicts expression and
+jaw parameters.
 """
 
 import os
@@ -65,13 +52,8 @@ def load_stage1_checkpoint_state_dict(
 
 
 def _load_deca_resnet50_weights(model: nn.Module, deca_model_tar: str):
-    """从 DECA 官方 deca_model.tar 里抽出 E_flame.encoder.* 的权重装到我们的 ResNet50 上.
-
-    DECA 的 state_dict 里 encoder 部分的 key 前缀是 'E_flame.encoder.',
-    我们把这一层前缀去掉后 load 到 resnet50 (deca_resnet.load_ResNet50Model() 返回) 即可.
-    """
+    """Load E_flame.encoder.* weights from the official DECA checkpoint."""
     ckpt = torch.load(deca_model_tar, map_location="cpu")
-    # DECA 的 checkpoint 直接就是 state_dict (key 带 'E_flame.xxx')
     if "state_dict" in ckpt:
         ckpt = ckpt["state_dict"]
     enc_state = {}
@@ -84,7 +66,7 @@ def _load_deca_resnet50_weights(model: nn.Module, deca_model_tar: str):
 
 
 class ConditionalDECAEncoder(nn.Module):
-    """可训练的 Conditional DECA Encoder. 接收图像 + 文本, 预测 (psi, jaw)."""
+    """Trainable image-text encoder that predicts (psi, jaw)."""
 
     PSI_DIM = 50
     JAW_DIM = 3
@@ -107,7 +89,7 @@ class ConditionalDECAEncoder(nn.Module):
         load_text_encoder: bool = True,
     ):
         super().__init__()
-        # 允许实例级覆盖类默认值, 但一般使用 PSI_DIM=50, JAW_DIM=3
+        # Allow instance-level overrides for ablations.
         if psi_dim is not None:
             self.PSI_DIM = psi_dim
         if jaw_dim is not None:
@@ -121,7 +103,7 @@ class ConditionalDECAEncoder(nn.Module):
         self.text_encoder = None
         self.tokenizer = None
 
-        # ---- 1) 图像 backbone: ResNet50, DECA 预训练初始化 ----
+        # ---- 1) Image backbone initialized from DECA when available ----
         self.encoder = deca_resnet.load_ResNet50Model()  # output: (B, 2048)
         if deca_model_tar is not None and os.path.isfile(deca_model_tar):
             missing, unexpected = _load_deca_resnet50_weights(self.encoder, deca_model_tar)
@@ -136,13 +118,11 @@ class ConditionalDECAEncoder(nn.Module):
                 p.requires_grad_(False)
             self.encoder.eval()
 
-        # ---- 2) 文本编码器: Qwen3 (冻结, bf16) ----
-        # Stage2 训练/推理会复用 FLUX pipeline 的 pipe.text_encoder，
-        # 因此可设置 load_text_encoder=False，仅保留吃外部 text_hidden_states 的能力。
+        # ---- 2) Qwen3 text encoder, usually frozen ----
+        # Stage2 can reuse pipe.text_encoder and pass external text_hidden_states.
         if load_text_encoder:
             from transformers import AutoModel, AutoTokenizer
-            # FLUX 目录布局: text_encoder/ 里只有模型权重, tokenizer 在隻壁 tokenizer/
-            # 如果没显式指定 tokenizer_path, 就自动查一下兄弟目录
+            # FLUX stores tokenizer files in a sibling tokenizer/ directory.
             resolved_tok_path = tokenizer_path
             if resolved_tok_path is None:
                 has_tok_here = any(
@@ -156,16 +136,15 @@ class ConditionalDECAEncoder(nn.Module):
                     if os.path.isdir(sibling):
                         resolved_tok_path = sibling
                     else:
-                        resolved_tok_path = text_encoder_path  # 既然没找到, 也只能给 AutoTokenizer 自己报错
+                        resolved_tok_path = text_encoder_path
             print(f"[ConditionalDECAEncoder] loading Qwen3 text encoder from {text_encoder_path} ...")
             print(f"[ConditionalDECAEncoder] loading Qwen3 tokenizer from {resolved_tok_path} ...")
             self.tokenizer = AutoTokenizer.from_pretrained(resolved_tok_path)
-            # sanity check: 正常 Qwen3 tokenizer vocab ~151936, fallback 到 GPT-2 会是 50257
+            # Catch silent fallback to the wrong tokenizer.
             if self.tokenizer.vocab_size < 10000:
                 raise RuntimeError(
-                    f"Tokenizer vocab_size={self.tokenizer.vocab_size} 看起来不是 Qwen3 ("
-                    f"期望 >=150000). 很可能 AutoTokenizer 静默回退到了 GPT-2. "
-                    f"检查 tokenizer_path={resolved_tok_path} 是否含 tokenizer.json / vocab.json."
+                    f"Tokenizer vocab_size={self.tokenizer.vocab_size} does not look like Qwen3. "
+                    f"Check that tokenizer_path={resolved_tok_path} contains tokenizer.json / vocab.json."
                 )
             self.text_encoder = AutoModel.from_pretrained(
                 text_encoder_path, torch_dtype=text_encoder_dtype,
@@ -175,10 +154,10 @@ class ConditionalDECAEncoder(nn.Module):
                     p.requires_grad_(False)
                 self.text_encoder.eval()
 
-        # ---- 3) 文本 → KV 投影 ----
+        # ---- 3) Text-to-KV projection ----
         self.text_kv_proj = nn.Linear(text_hidden_size, feature_dim)
 
-        # ---- 4) 一次 Cross-Attn: Q=image_feat (1 token), KV=text_kv ----
+        # ---- 4) Cross-attention: Q=image_feat (1 token), KV=text_kv ----
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=feature_dim,
             num_heads=num_attn_heads,
@@ -188,7 +167,7 @@ class ConditionalDECAEncoder(nn.Module):
         self.attn_norm_kv = nn.LayerNorm(feature_dim)
         self.post_attn_norm = nn.LayerNorm(feature_dim)
 
-        # ---- 5) 回归头: 严格对齐 decalib.models.encoders.ResnetEncoder.layers ----
+        # ---- 5) Regression head aligned with DECA ResnetEncoder.layers ----
         #     (feature_dim) -> (reg_hidden) -> (PSI_DIM + JAW_DIM)
         self.outsize = self.PSI_DIM + self.JAW_DIM
         self.layers = nn.Sequential(
@@ -198,10 +177,10 @@ class ConditionalDECAEncoder(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # 辅助方法
+    # Helpers
     # ------------------------------------------------------------------
     def trainable_parameters(self):
-        """返回需要优化的参数(便于外部构造 optimizer param_groups)."""
+        """Return parameters that require gradients."""
         return [p for p in self.parameters() if p.requires_grad]
 
     def encode_text(
@@ -226,7 +205,7 @@ class ConditionalDECAEncoder(nn.Module):
         return hidden.permute(0, 2, 1, 3).reshape(b, seq_len, n_layers * hidden_dim)
 
     def tokenize(self, prompts, max_length: int = 64, device=None):
-        """便捷 tokenize 方法. 训练时一般用不到 (我们在 Dataset 里已经 tokenize 过)."""
+        """Tokenize prompts for standalone Stage1 use."""
         if self.tokenizer is None:
             raise RuntimeError("ConditionalDECAEncoder was built with load_text_encoder=False; use the external FLUX tokenizer.")
         enc = self.tokenizer(
@@ -238,7 +217,7 @@ class ConditionalDECAEncoder(nn.Module):
         return enc
 
     # ------------------------------------------------------------------
-    # 前向
+    # Forward
     # ------------------------------------------------------------------
     def forward(
         self,
@@ -250,50 +229,49 @@ class ConditionalDECAEncoder(nn.Module):
         """
         Args:
             ref_image:            (B, 3, 224, 224)
-            input_ids:            (B, L) 可选 -- 若提供就现场跑 Qwen3
-            attention_mask:       (B, L) 可选 -- 若提供就现场跑 Qwen3
-            text_hidden_states:   (B, L, 7680) 可选 -- 若提供就直接用(已缓存)
+            input_ids:            optional (B, L), used for internal Qwen3 encoding
+            attention_mask:       optional (B, L), used for internal Qwen3 encoding
+            text_hidden_states:   optional cached prompt features, (B, L, 7680)
 
         Returns:
             psi_pred: (B, 50)
             jaw_pred: (B, 3)
         """
-        # 1) 图像特征
+        # 1) Image features
         image_feat = self.encoder(ref_image)           # (B, 2048)
 
-        # 2) 文本特征 (缓存优先; 否则现场编码)
+        # 2) Text features, preferring cached hidden states
         if text_hidden_states is None:
             assert input_ids is not None and attention_mask is not None, \
                 "must provide either text_hidden_states or (input_ids, attention_mask)"
             text_hidden_states = self.encode_text(input_ids, attention_mask)
-        # 统一到主 dtype
+        # Match the backbone dtype.
         text_hidden_states = text_hidden_states.to(image_feat.dtype)
 
         text_kv = self.text_kv_proj(text_hidden_states)  # (B, L, 2048)
 
-        # 3) 一次 Cross-Attn
+        # 3) Cross-attention
         q = self.attn_norm_q(image_feat).unsqueeze(1)       # (B, 1, 2048)
         kv = self.attn_norm_kv(text_kv)                     # (B, L, 2048)
         key_padding_mask = None
         if attention_mask is not None:
-            key_padding_mask = (attention_mask == 0)        # True 表示 padding
+            key_padding_mask = (attention_mask == 0)        # True means padding.
         attn_out, _ = self.cross_attn(
             query=q, key=kv, value=kv,
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
-        fused = image_feat + attn_out.squeeze(1)            # (B, 2048) 残差
+        fused = image_feat + attn_out.squeeze(1)            # Residual fusion.
         fused = self.post_attn_norm(fused)
 
-        # 4) 回归头
+        # 4) Regression head
         params = self.layers(fused)                          # (B, PSI_DIM + JAW_DIM)
         psi_pred = params[:, : self.PSI_DIM]                 # (B, PSI_DIM)
         jaw_pred = params[:, self.PSI_DIM : self.PSI_DIM + self.JAW_DIM]  # (B, JAW_DIM)
         return psi_pred, jaw_pred
 
     # ------------------------------------------------------------------
-    # Stage2 专用入口: 直接吃外部 text_hidden_states (例如来自 pipe.text_encoder)
-    # 这样 Stage1 / Stage2 可以共用同一份 Qwen3 输出, 避免语义漂移。
+    # Stage2 entry point: consume external text_hidden_states from pipe.text_encoder.
     # ------------------------------------------------------------------
     def predict_from_text_hidden(
         self,
@@ -301,12 +279,12 @@ class ConditionalDECAEncoder(nn.Module):
         text_hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """等价于 forward(ref_image, text_hidden_states=...), 显式命名, Stage2 用。
+        """Named wrapper around forward(..., text_hidden_states=...) for Stage2.
 
         Args:
             ref_image: (B, 3, 224, 224)
             text_hidden_states: (B, L, text_hidden_size) -- FLUX.2 prompt_embeds, concat Qwen3 layers 9/18/27
-            attention_mask:     (B, L) -- 对应 text 的 mask, 用作 cross-attn 的 key_padding_mask
+            attention_mask:     (B, L), used as the cross-attention key padding mask
         """
         return self.forward(
             ref_image=ref_image,
@@ -316,9 +294,8 @@ class ConditionalDECAEncoder(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Stage2 优化: 释放内部 Qwen3, 之后仅通过 predict_from_text_hidden(...) 调用
-    # 原因: Stage2 里 pipe.text_encoder 与本模块的 self.text_encoder 是同一份
-    # Qwen3 权重(bit-exact), 冗余显存 ~5GB, 释放后由外部统一前向。
+    # Stage2 memory optimization: release internal Qwen3 after switching to
+    # predict_from_text_hidden(...).
     # ------------------------------------------------------------------
     def drop_text_encoder(self):
         if getattr(self, "text_encoder", None) is not None:
@@ -329,7 +306,7 @@ class ConditionalDECAEncoder(nn.Module):
         torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
-    # 训练/评估模式: 保持冻结模块始终 eval
+    # Keep frozen modules in eval mode.
     # ------------------------------------------------------------------
     def train(self, mode: bool = True):
         super().train(mode)

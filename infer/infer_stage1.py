@@ -1,17 +1,11 @@
-"""
-Stage1 推理脚本:
-输入一张参考人脸图 + 一条文本指令，输出:
-1) 参考图对应的三张控制图: rendered / normal / albedo
-2) 目标表情对应的三张控制图: rendered / normal / albedo
-3) 同时保存两份 9 通道控制 tensor: ref_control_9ch.pt / tgt_control_9ch.pt
+"""Stage1 inference script.
 
-用途:
-- 验证 Stage1 训练好的 Conditional DECA Encoder 是否能根据 prompt 预测出合理的 exp / jaw
-- 为后续 Stage2 的 CMM 输入做可视化与冒烟测试
+Given a reference face and a text instruction, it saves reference/target DECA
+control maps plus 9-channel tensors for CMM smoke tests.
 
-示例:
+Example:
 python infer/infer_stage1.py \
-    --ref ./原图.png \
+    --ref ./reference.png \
     --prompt "make her burst into laughter" \
     --output_dir ./output_stage1 \
     --ckpt ./checkpoints/stage1/best-step-2320.pt
@@ -28,9 +22,8 @@ import torch
 import yaml
 from torchvision.utils import save_image
 
-# 当前 controlface310 环境下，最小 GPU 卷积在 cuDNN 路径会触发
-# CUDNN_STATUS_NOT_INITIALIZED。这里显式禁用 cuDNN，保留 GPU 推理，
-# 让卷积回退到非 cuDNN 的 CUDA 实现，作为当前环境的最快修复路线。
+# Disable cuDNN for environments where small GPU convolutions trigger
+# CUDNN_STATUS_NOT_INITIALIZED; GPU execution still uses non-cuDNN kernels.
 torch.backends.cudnn.enabled = False
 torch.backends.cudnn.benchmark = False
 
@@ -39,7 +32,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# chumpy 依赖若干已在新版本 numpy 中移除的旧别名；在导入 DECA/FLAME 前补齐。
+# chumpy expects aliases removed in newer numpy versions.
 _NUMPY_LEGACY_ALIASES = {
     "bool": bool,
     "int": int,
@@ -161,8 +154,8 @@ def run_stage1_infer(
     dataset = deca_dataset.TestData([ref_path], iscrop=True, size=deca_test_size)
     sample = dataset[0]
 
-    ref_crop = sample["image"].unsqueeze(0).to(device)                 # (1,3,224,224), 给 DECA / Stage1
-    original_image = sample["original_image"].unsqueeze(0).to(device)  # decode(render_orig=True) 用
+    ref_crop = sample["image"].unsqueeze(0).to(device)                 # (1,3,224,224) for DECA/Stage1
+    original_image = sample["original_image"].unsqueeze(0).to(device)  # used by decode(render_orig=True)
     tform = sample["tform"].unsqueeze(0)
     tform = torch.inverse(tform).transpose(1, 2).to(device)
 
@@ -260,7 +253,7 @@ def save_outputs(result: dict, ref_path: str, output_dir: str):
     save_image(result["tgt_normal"], os.path.join(output_dir, f"{stem}_tgt_normal.png"))
     save_image(result["tgt_albedo"], os.path.join(output_dir, f"{stem}_tgt_albedo.png"))
 
-    # 方便直接检查 CMM 输入
+    # Save CMM-ready controls for inspection.
     torch.save(
         {
             "control": result["ref_control_9ch"],
@@ -326,7 +319,7 @@ def parse_args():
     parser.add_argument(
         "--no_alpha_mask",
         action="store_true",
-        help="关闭 DECA alpha mask, 使控制图保留原图背景 (默认 mask 背景为黑)",
+        help="disable DECA alpha masking and keep original control-map backgrounds",
     )
     return parser.parse_args()
 

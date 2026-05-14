@@ -1,12 +1,11 @@
-"""
-DECA 参数提取完整性校验工具。
+"""Verify completeness and shape validity of extracted DECA parameter files.
 
-用法:
+Usage:
     python scripts/verify_deca_params.py \
         --src_root /.../final_data_raf_bucket_postprocessed \
         --out_root /.../face_emoji/deca_params/raf
 
-支持与 extract 一样的多 (src,out) 对同时校验:
+Multiple (src, out) pairs can be checked in one run:
     --src_root A --out_root A_out --src_root B --out_root B_out
 
 nohup python scripts/verify_deca_params.py \
@@ -17,13 +16,13 @@ nohup python scripts/verify_deca_params.py \
     --deep_check \
     > verify_deep.log 2>&1 &
 
-输出:
-  1) 终端汇总表: total / saved / failed / missing / orphan / dup_fail
-  2) {out_root}/_missing.txt     : 漏网源图路径 (需重跑)
-  3) {out_root}/_orphan.txt      : 多出的 .pt 路径 (可考虑清理)
-  4) {out_root}/_dup_fail.txt    : 既成功又失败的路径 (异常,建议删掉 .pt 重跑)
-  5) {out_root}/_verify_summary.json : 结构化汇总
-  6) 可选 --deep_check: 逐个打开 .pt 验证字段完整 & 形状正确
+Outputs:
+  1) terminal summary: total / saved / failed / missing / orphan / dup_fail
+  2) {out_root}/_missing.txt
+  3) {out_root}/_orphan.txt
+  4) {out_root}/_dup_fail.txt
+  5) {out_root}/_verify_summary.json
+  6) optional --deep_check for field and shape validation
 """
 
 import os
@@ -58,7 +57,7 @@ def walk_images(src_root):
 
 
 def walk_pts(out_root):
-    """扫描 out_root 下所有 .pt (排除 failed jsonl 与 summary)."""
+    """Return all .pt files under out_root."""
     out = []
     for root, _, files in os.walk(out_root):
         for fn in files:
@@ -68,17 +67,14 @@ def walk_pts(out_root):
 
 
 def pt_to_src(pt_path, src_root, out_root):
-    """
-    根据镜像目录约定, 把 out_root/<rel>/name.pt 还原成候选源图路径 (多扩展名都试一遍).
-    返回实际存在的源图, 否则返回 None.
-    """
+    """Recover the source image path from a mirrored .pt path."""
     rel = os.path.relpath(pt_path, out_root)
     rel_no_ext = os.path.splitext(rel)[0]
     for ext in IMG_EXTS + tuple(e.upper() for e in IMG_EXTS):
         cand = os.path.join(src_root, rel_no_ext + ext)
         if os.path.exists(cand):
             return cand
-    # 源图已经不存在,返回去掉扩展名的规范形式,便于 diff
+    # Source no longer exists; return a canonical path for diffs.
     return os.path.join(src_root, rel_no_ext + ".<?>")
 
 
@@ -89,7 +85,7 @@ def src_to_pt(src_path, src_root, out_root):
 
 
 def load_failed(out_root):
-    """合并 _failed.jsonl + _failed_shard*.jsonl, 返回 {src_image_path -> reason}."""
+    """Merge failed logs into {src_image_path: reason}."""
     failed = {}
     patterns = ["_failed.jsonl", "_failed_shard*.jsonl"]
     for pat in patterns:
@@ -110,7 +106,7 @@ def load_failed(out_root):
 
 
 def deep_check_pt(pt_path):
-    """打开 .pt 检查必需字段与形状, 返回 (ok, reason)."""
+    """Validate required fields and tensor shapes in one .pt file."""
     try:
         d = torch.load(pt_path, map_location="cpu")
     except Exception as e:
@@ -139,7 +135,7 @@ def verify_one(src_root, out_root, deep_check=False):
 
     print("  scanning .pt files ...")
     B_pt = walk_pts(out_root)                          # set of pt paths
-    # 把 .pt 路径映射回 src 路径, 便于和 A 取交差
+    # Map .pt paths back to source paths for set comparisons.
     pt_to_src_map = {}
     for pt in B_pt:
         sp = pt_to_src(pt, src_root, out_root)
@@ -152,9 +148,9 @@ def verify_one(src_root, out_root, deep_check=False):
     F = set(F_map.keys())
     print(f"    failed records: {len(F)}")
 
-    missing  = A - B - F                               # 既没 .pt 也没失败记录
-    orphan   = B - A                                   # 有 .pt 但源图不在
-    dup_fail = B & F                                   # 既成功又失败
+    missing  = A - B - F                               # no .pt and no failure record
+    orphan   = B - A                                   # .pt exists but source is absent
+    dup_fail = B & F                                   # both saved and failed
     covered  = (A & B) | (A & F)
 
     print(f"\n  --- summary ---")
@@ -162,11 +158,11 @@ def verify_one(src_root, out_root, deep_check=False):
     print(f"    saved (A∩B)   : {len(A & B)}")
     print(f"    failed (A∩F)  : {len(A & F)}")
     print(f"    covered       : {len(covered)}  ({100.0*len(covered)/max(1,len(A)):.2f}%)")
-    print(f"    MISSING       : {len(missing)}   <-- 需重跑")
+    print(f"    MISSING       : {len(missing)}   <-- rerun needed")
     print(f"    orphan .pt    : {len(orphan)}")
     print(f"    dup_fail      : {len(dup_fail)}")
 
-    # 写出清单
+    # Write reports.
     def dump(path, items):
         with open(path, "w") as f:
             for x in sorted(items):
@@ -184,7 +180,7 @@ def verify_one(src_root, out_root, deep_check=False):
         "coverage": len(covered) / max(1, len(A)),
     }
 
-    # 深度字段校验
+    # Optional field-level validation.
     if deep_check and len(B_pt) > 0:
         print("  deep checking .pt contents ...")
         bad = []
@@ -210,7 +206,7 @@ def main():
     ap.add_argument("--src_root", action="append", required=True)
     ap.add_argument("--out_root", action="append", required=True)
     ap.add_argument("--deep_check", action="store_true",
-                    help="逐个打开 .pt 校验字段和形状, 慢但彻底")
+                    help="open every .pt file and validate fields/shapes")
     args = ap.parse_args()
     assert len(args.src_root) == len(args.out_root)
 
@@ -225,9 +221,9 @@ def main():
     miss   = sum(x["missing"] for x in all_summary)
     print(f"  total={total}  saved={saved}  failed={failed}  missing={miss}")
     if miss == 0:
-        print("  ✅ 全部源图都有对应产出或明确失败记录")
+        print("  OK: every source image has output or a failure record")
     else:
-        print(f"  ❌ 有 {miss} 张图未处理, 请查看各 out_root 下的 _missing.txt")
+        print(f"  ERROR: {miss} images are unprocessed; see each _missing.txt")
 
 
 if __name__ == "__main__":

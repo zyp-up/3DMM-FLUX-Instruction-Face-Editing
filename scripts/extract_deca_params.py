@@ -1,8 +1,7 @@
-"""
-离线预提取 DECA 参数脚本 (按图片文件夹镜像输出, DataLoader + batch + 多卡数据分片)
+"""Offline DECA parameter extraction with mirrored output paths.
 
 =============================================================================
-完整启动命令 (单卡, 同时跑 raf + v1 两个数据集)
+Single-GPU example for raf + v1
 =============================================================================
 python scripts/extract_deca_params.py \
     --src_root ./face_emoji/final_data_raf_bucket_postprocessed \
@@ -12,8 +11,7 @@ python scripts/extract_deca_params.py \
     --batch_size 32 --num_workers 16
 
 =============================================================================
-完整启动命令 (多卡数据分片, 以 8 卡为例; 推荐用 scripts/run_extract_multi_gpu.sh 统一启动)
--- 每张卡跑自己那 1/N 的图片, 互不重叠, 汇合后 = 单卡跑出来的全集
+Multi-GPU sharding example; scripts/run_extract_multigpu.sh is preferred
 for r in 0 1 2 3 4 5 6 7; do \
     CUDA_VISIBLE_DEVICES=$r \
     nohup python scripts/extract_deca_params.py \
@@ -27,21 +25,19 @@ for r in 0 1 2 3 4 5 6 7; do \
 done; wait
 
 =============================================================================
-说明
+Notes
 =============================================================================
-1) 遍历 src_root 下所有图片, 按 imgs[shard_id::num_shards] 切片 (数据分片: 每张卡
-   只拿自己的 1/num_shards, 不同卡之间图片互不重叠), 再过滤已存在的 .pt.
-2) DataLoader 的每个 worker 进程内 FAN 检测器只初始化一次, 整个 shard 复用.
-3) GPU 批推理 DECA.encode(batch), 逐样本切片存盘。
-4) 输出目录结构与单卡完全一致 (多卡仅改变“谁来写某张图的 .pt”, 不改变路径):
+1) Each shard processes imgs[shard_id::num_shards] and skips existing .pt files.
+2) FAN is initialized once per DataLoader worker.
+3) DECA.encode runs by GPU batch, then saves one .pt per source image.
+4) Output paths mirror the source directory:
      {src_root}/<rel>/name.JPG  =>  {out_root}/<rel>/name.pt
-   例:
+   Example:
      .../final_data_raf_bucket_postprocessed/544x736/angry/raf_xxx.jpg
      .../ControlFace-main/face_emoji/deca_params/raf/544x736/angry/raf_xxx.pt
-   .pt 内容: dict(shape, tex, exp, pose, cam, light, detail, tform, src_image_path).
-5) 失败样本写入 {out_root}/_failed_shard{shard_id}.jsonl (不中断整体流程;
-   多卡跑完后可用 cat _failed_shard*.jsonl > _failed.jsonl 合并).
-6) 断点续跑: 任何时候重启, 已存在的 .pt 会被自动跳过.
+   .pt content: dict(shape, tex, exp, pose, cam, light, detail, tform, src_image_path).
+5) Failed samples are appended to {out_root}/_failed_shard{shard_id}.jsonl.
+6) Restarts are safe because existing outputs are skipped.
 """
 
 import os
@@ -69,13 +65,7 @@ IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp")
 
 
 class CPUFAN(object):
-    """与 decalib.datasets.detectors.FAN 接口完全一致, 但强制跑在 CPU 上.
-
-    原 FAN.__init__() 无参构造 face_alignment.FaceAlignment(...), 该函数默认把模型
-    搬到 'cuda'. 但我们的 DataLoader worker 是 fork 出的子进程, 不能再初始化 CUDA,
-    会报 'Cannot re-initialize CUDA in forked subprocess'. 在 worker 内改用 CPU 最安全,
-    FAN SFD 本身在 CPU 上每张图仅 ~10-30ms, 16 worker 并行后完全跑得起 GPU 端.
-    """
+    """FAN-compatible detector forced to CPU for DataLoader workers."""
 
     def __init__(self):
         import face_alignment
@@ -103,7 +93,7 @@ class CPUFAN(object):
 
 
 def configure_deca_cfg(deca_data_dir: str):
-    """把 deca_cfg 中所有默认指向 ControlFace-main/data/xxx 的路径, 重定向到 DECA/data/xxx."""
+    """Point DECA config paths to the selected DECA data directory."""
     deca_cfg.pretrained_modelpath = os.path.join(deca_data_dir, "deca_model.tar")
     m = deca_cfg.model
     m.topology_path = os.path.join(deca_data_dir, "head_template.obj")
@@ -121,7 +111,7 @@ def configure_deca_cfg(deca_data_dir: str):
 
 
 def walk_images(src_root: str):
-    """递归遍历 src_root, 返回所有图片的绝对路径列表 (按路径排序)."""
+    """Return sorted image paths under src_root."""
     result = []
     for root, _, files in os.walk(src_root):
         for fn in files:
@@ -132,14 +122,14 @@ def walk_images(src_root: str):
 
 
 def src_to_out_path(src_path: str, src_root: str, out_root: str) -> str:
-    """把 {src_root}/<rel>/name.JPG 映射为 {out_root}/<rel>/name.pt."""
+    """Map {src_root}/<rel>/name.JPG to {out_root}/<rel>/name.pt."""
     rel = os.path.relpath(src_path, src_root)
     rel_no_ext = os.path.splitext(rel)[0]
     return os.path.join(out_root, rel_no_ext + ".pt")
 
 
 def _bbox2point(left, right, top, bottom, bbox_type):
-    """复制自 TestData.bbox2point, 用于 kpt68 / bbox 两种检测结果."""
+    """Mirror TestData.bbox2point for kpt68 and bbox detections."""
     if bbox_type == "kpt68":
         old_size = (right - left + bottom - top) / 2 * 1.1
         center = np.array([right - (right - left) / 2.0,
@@ -154,7 +144,7 @@ def _bbox2point(left, right, top, bottom, bbox_type):
 
 
 class CropDataset(Dataset):
-    """CPU 多进程预处理 Dataset: FAN 在每个 worker 内只初始化一次, 全程复用."""
+    """CPU preprocessing dataset with one FAN instance per worker."""
 
     def __init__(self, img_paths, crop_size=224, scale=1.25, size=256):
         self.img_paths = img_paths
@@ -165,8 +155,7 @@ class CropDataset(Dataset):
 
     def _lazy_init_detector(self):
         if self.face_detector is None:
-            # 注意: 此处必须用 CPU 版 FAN, 不能用 deca_detectors.FAN()
-            # (后者默认评估器设备='cuda', 在 fork 子进程里会爆 CUDA re-init 错误)
+            # Use CPU FAN to avoid CUDA re-init inside forked workers.
             self.face_detector = CPUFAN()
 
     def __len__(self):
@@ -209,7 +198,7 @@ class CropDataset(Dataset):
         )
 
     def __getitem__(self, index):
-        """成功返回 dict, 失败返回 None (交给 collate_fn 过滤)."""
+        """Return an ok/fail record consumed by _collate."""
         self._lazy_init_detector()
         path = self.img_paths[index]
         try:
@@ -221,7 +210,7 @@ class CropDataset(Dataset):
 
 
 def _collate(batch):
-    """过滤 ok=False 样本, 剩下的做 stack."""
+    """Stack successful samples and keep failed records."""
     ok = [b for b in batch if b is not None and b["ok"]]
     fail = [b for b in batch if b is not None and not b["ok"]]
     out = {"fail": fail}
@@ -240,7 +229,7 @@ def process_one_dataset(deca: DECA, src_root: str, out_root: str,
                         device: str, image_size: int,
                         batch_size: int, num_workers: int,
                         shard_id: int, num_shards: int):
-    """对一个 (src_root, out_root) 做完整镜像提取."""
+    """Extract one mirrored (src_root, out_root) pair."""
     src_root = os.path.abspath(src_root)
     out_root = os.path.abspath(out_root)
     os.makedirs(out_root, exist_ok=True)
@@ -252,7 +241,7 @@ def process_one_dataset(deca: DECA, src_root: str, out_root: str,
     all_imgs = walk_images(src_root)
     sharded = all_imgs[shard_id::num_shards]
 
-    # 断点续跑: 过滤已存在的 .pt
+    # Resume-safe skip for existing .pt files.
     todo, n_existed = [], 0
     for p in sharded:
         if os.path.exists(src_to_out_path(p, src_root, out_root)):
@@ -279,7 +268,7 @@ def process_one_dataset(deca: DECA, src_root: str, out_root: str,
     with open(failed_log_path, "a") as flog:
         pbar = tqdm(total=len(todo), desc=f"{os.path.basename(src_root)}[s{shard_id}]")
         for batch in loader:
-            # 先写失败
+            # Persist failures before continuing the batch.
             for f in batch["fail"]:
                 flog.write(json.dumps({
                     "src_image_path": f["path"],
@@ -293,12 +282,12 @@ def process_one_dataset(deca: DECA, src_root: str, out_root: str,
             if batch["images"] is None:
                 continue
 
-            # GPU 批推理
+            # Batched GPU inference.
             images = batch["images"].to(device, non_blocking=True)
             with torch.no_grad():
                 codedict = deca.encode(images)
 
-            # 逐样本切片落盘
+            # Save one payload per source image.
             tforms = batch["tforms"]
             paths = batch["paths"]
             B = images.shape[0]
@@ -323,34 +312,34 @@ def process_one_dataset(deca: DECA, src_root: str, out_root: str,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--src_root", type=str, action="append", required=True,
-                        help="源图片文件夹根路径, 可多次指定; 与 --out_root 按顺序成对.")
+                        help="source image root; repeat in the same order as --out_root")
     parser.add_argument("--out_root", type=str, action="append", required=True,
-                        help="输出参数文件夹根路径, 可多次指定; 与 --src_root 按顺序成对.")
+                        help="output parameter root; repeat in the same order as --src_root")
     parser.add_argument(
         "--deca_data_dir",
         type=str,
         default=os.path.join(PROJECT_ROOT, "DECA", "data"),
-        help="DECA 权重所在目录, 默认 ControlFace-main/DECA/data",
+        help="DECA data directory; default: ControlFace-main/DECA/data",
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--image_size", type=int, default=256,
-                        help="TestData 的 size 参数, 与原 sample.py 对齐")
+                        help="TestData size value aligned with sample.py")
     parser.add_argument("--batch_size", type=int, default=32,
-                        help="DECA.encode 的 batch size")
+                        help="batch size for DECA.encode")
     parser.add_argument("--num_workers", type=int, default=16,
-                        help="DataLoader 多进程预处理 worker 数")
+                        help="DataLoader preprocessing workers")
     parser.add_argument("--shard_id", type=int, default=0,
-                        help="当前分片索引, [0, num_shards)")
+                        help="current shard index, [0, num_shards)")
     parser.add_argument("--num_shards", type=int, default=1,
-                        help="总分片数; 多卡时 = 卡数")
+                        help="total shard count; usually number of GPUs")
     args = parser.parse_args()
 
     if len(args.src_root) != len(args.out_root):
         raise ValueError(
-            f"--src_root ({len(args.src_root)}) 与 --out_root ({len(args.out_root)}) 数量必须相同"
+            f"--src_root ({len(args.src_root)}) and --out_root ({len(args.out_root)}) must have the same length"
         )
     if not (0 <= args.shard_id < args.num_shards):
-        raise ValueError(f"shard_id {args.shard_id} 不在 [0, {args.num_shards}) 范围内")
+        raise ValueError(f"shard_id {args.shard_id} is outside [0, {args.num_shards})")
 
     print(f"[cfg] DECA data dir: {args.deca_data_dir}")
     print(f"[cfg] shard_id={args.shard_id}/{args.num_shards}, "

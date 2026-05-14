@@ -1,22 +1,16 @@
 # -*- coding: utf-8 -*-
-"""
-Stage1 训练主脚本: Conditional DECA Encoder 的监督预训练.
+"""Stage1 training entrypoint for supervised Conditional DECA Encoder pretraining.
 
-用法 (在项目根目录执行):
+Usage from the project root:
     torchrun --standalone --nproc_per_node=8 train/train_stage1.py \
         --config configs/stage1.yaml
 
-    # CLI 临时覆盖某些字段:
+    # Override config fields from CLI:
     torchrun ... train/train_stage1.py --config configs/stage1.yaml \
         --opts train.lr=5e-5 data.batch_size=16 train.epochs=10
 
-设计要点:
-    1. 纯 yaml 配置驱动, 所有超参可改, 脚本不写死.
-    2. DDP (torchrun 拉起) + bf16 autocast, 无 GradScaler.
-    3. 数据 9:1 随机划分 (seed 固定), DistributedSampler + set_epoch(epoch).
-    4. 优化器 AdamW + linear warmup(5%) + cosine decay.
-    5. wandb 打 loss/lr/grad_norm, epoch 末统计 en/cn 分布.
-    6. 只存 best ckpt (按 val/total 最小).
+The script is YAML-driven, supports torchrun DDP, and keeps a single best
+checkpoint by validation metric.
 """
 
 import argparse
@@ -32,11 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm.auto import tqdm
 
-# 脚本位于 train/ 子目录, 而 src.* / configs / jsonl 等资源都相对项目根.
-# 统一做两件事:
-#   1) 把项目根插入 sys.path, 保证 `from src.* import ...` 能成功;
-#   2) 如果启动时 cwd 不在项目根 (比如直接 python train/train_stage1.py), 直接 chdir
-#      到项目根, 让 yaml 里的 ./v1_pairs_with_instructions.jsonl 等相对路径生效.
+# Keep imports and config-relative paths stable when launched from train/.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -62,7 +52,7 @@ from src.models.conditional_deca_encoder import ConditionalDECAEncoder, stage1_c
 
 
 # ===========================================================================
-# Config 工具: yaml 加载 + CLI --opts 覆盖 (dot-path key)
+# Config helpers: YAML loading and dot-path CLI overrides.
 # ===========================================================================
 def _set_nested(d: Dict[str, Any], dotted: str, value: Any) -> None:
     keys = dotted.split(".")
@@ -89,10 +79,10 @@ def load_config(config_path: str, cli_opts: Optional[List[str]] = None) -> Dict[
 
 
 # ===========================================================================
-# DDP 工具
+# DDP helpers
 # ===========================================================================
 def ddp_setup() -> Tuple[int, int, int, torch.device]:
-    """根据 torchrun env 初始化 DDP, 返回 (rank, local_rank, world_size, device)."""
+    """Initialize DDP from torchrun env and return rank/device metadata."""
     rank = int(os.environ.get("RANK", 0))
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -113,7 +103,7 @@ def ddp_cleanup():
 
 
 def reduce_mean(t: torch.Tensor) -> torch.Tensor:
-    """跨 DDP 所有 rank 做均值. 输入标量 tensor."""
+    """Average a scalar tensor across DDP ranks."""
     if not dist.is_initialized():
         return t
     t = t.clone()
@@ -123,7 +113,7 @@ def reduce_mean(t: torch.Tensor) -> torch.Tensor:
 
 
 # ===========================================================================
-# 随机数种子
+# Random seed
 # ===========================================================================
 def set_seed(seed: int, rank: int = 0):
     s = seed + rank
@@ -134,7 +124,7 @@ def set_seed(seed: int, rank: int = 0):
 
 
 # ===========================================================================
-# 数据集切分 (9:1 随机, seed 固定, 所有 rank 切分结果一致)
+# Train/validation split with a fixed seed.
 # ===========================================================================
 def split_train_val(
     dataset: Stage1Dataset, val_ratio: float, seed: int,
@@ -149,7 +139,7 @@ def split_train_val(
 
 
 # ===========================================================================
-# 调度器: linear warmup + cosine decay
+# Scheduler: linear warmup + cosine decay.
 # ===========================================================================
 def build_scheduler(optimizer, warmup_steps: int, total_steps: int):
     def lr_lambda(step: int) -> float:
@@ -162,7 +152,7 @@ def build_scheduler(optimizer, warmup_steps: int, total_steps: int):
 
 
 # ===========================================================================
-# 模型构造 (从 cfg)
+# Model construction
 # ===========================================================================
 DTYPE_MAP = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}
 
@@ -179,7 +169,7 @@ def build_loss(cfg_loss: Dict[str, Any]) -> Stage1Loss:
 
 
 # ===========================================================================
-# 一次 val pass
+# Validation pass
 # ===========================================================================
 @torch.no_grad()
 def run_validation(
@@ -225,7 +215,7 @@ def save_ckpt(
     out_dir: str, name: str, model: nn.Module, step: int, epoch: int,
     val_metrics: Optional[Dict[str, float]], cfg: Dict[str, Any],
 ) -> str:
-    """写任意名字的 ckpt。返回写入的路径。"""
+    """Save a checkpoint and return its path."""
     os.makedirs(out_dir, exist_ok=True)
     to_save = model.module if isinstance(model, DDP) else model
     state_dict, excluded_prefixes = stage1_checkpoint_state_dict(
@@ -248,7 +238,7 @@ def save_best_ckpt(
     out_dir: str, model: nn.Module, step: int, epoch: int,
     val_metrics: Dict[str, float], cfg: Dict[str, Any],
 ) -> str:
-    """仅保留当前唯一 best-step-{step}.pt；新 best 会删除旧的 best-step-*。"""
+    """Keep only the current best-step-{step}.pt checkpoint."""
     os.makedirs(out_dir, exist_ok=True)
     for fn in os.listdir(out_dir):
         if fn.startswith("best-step-") and fn.endswith(".pt"):
@@ -261,7 +251,7 @@ def save_best_ckpt(
 
 
 def _rotate_step_ckpts(out_dir: str, limit: Optional[int]):
-    """按 step 量取最近 limit 份 step-*.pt，多余的删掉。limit=None 不限。"""
+    """Keep the newest limit step checkpoints."""
     if not limit or limit <= 0:
         return
     if not os.path.isdir(out_dir):
@@ -276,7 +266,7 @@ def _rotate_step_ckpts(out_dir: str, limit: Optional[int]):
             files.append((s, os.path.join(out_dir, fn)))
     if len(files) <= limit:
         return
-    files.sort(key=lambda x: x[0])  # 升序，小的在前
+    files.sort(key=lambda x: x[0])
     for _, path in files[: len(files) - limit]:
         try:
             os.remove(path)
@@ -285,7 +275,7 @@ def _rotate_step_ckpts(out_dir: str, limit: Optional[int]):
 
 
 # ===========================================================================
-# 主训练函数
+# Main training loop
 # ===========================================================================
 def train(cfg: Dict[str, Any]):
     rank, local_rank, world_size, device = ddp_setup()
@@ -298,13 +288,13 @@ def train(cfg: Dict[str, Any]):
         print(f"[ckpt] run_name={run_name}")
         print(f"[ckpt] out_dir={cfg['ckpt']['out_dir']}")
 
-    # --- wandb (仅主进程) ---
+    # --- wandb on main process ---
     wandb = None
     if is_main(rank) and cfg["logging"].get("wandb_mode", "online") != "disabled":
         try:
             import wandb as wandb_mod
             wandb = wandb_mod
-            # 自动登录: 优先用 yaml 里的 wandb_api_key, 其次失败回落到 env / ~/.netrc
+            # Prefer explicit key, then fall back to env/netrc.
             api_key = cfg["logging"].get("wandb_api_key") or os.environ.get("WANDB_API_KEY")
             if api_key:
                 masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 16 else "***"
@@ -313,7 +303,7 @@ def train(cfg: Dict[str, Any]):
                     wandb.login(key=api_key, relogin=False, verify=False)
                 except Exception as e:
                     print(f"[WARN] wandb.login failed: {e}; fallback to env/netrc")
-            # 注: 传给 wandb 的 config 要脱敏, 避免把 api_key 写进 run 的持久化 config
+            # Do not persist API keys in wandb config.
             safe_cfg = {k: v for k, v in cfg.items() if k != "logging"}
             safe_logging = {k: v for k, v in cfg["logging"].items() if k != "wandb_api_key"}
             safe_cfg["logging"] = safe_logging
@@ -328,7 +318,7 @@ def train(cfg: Dict[str, Any]):
             print("[WARN] wandb not installed; skipping wandb logging.")
             wandb = None
 
-    # --- 模型 / loss ---
+    # --- Model / loss ---
     if is_main(rank):
         print("[build] constructing model ...")
     model = build_model(cfg["model"]).to(device)
@@ -336,9 +326,9 @@ def train(cfg: Dict[str, Any]):
 
     if world_size > 1:
         model = DDP(model, device_ids=[local_rank],
-                    find_unused_parameters=True)   # Qwen3 冻结 -> 存在无 grad 参数
+                    find_unused_parameters=True)   # Frozen Qwen3 has no-grad parameters.
 
-    # --- 数据 ---
+    # --- Data ---
     base_ds = Stage1Dataset(
         sources=cfg["data"]["sources"],
         image_size=cfg["data"]["image_size"],
@@ -383,7 +373,7 @@ def train(cfg: Dict[str, Any]):
         persistent_workers=cfg["data"]["persistent_workers"],
     )
 
-    # --- 优化器 / 调度器 ---
+    # --- Optimizer / scheduler ---
     trainable = [p for p in model.parameters() if p.requires_grad]
     if is_main(rank):
         n_tr = sum(p.numel() for p in trainable)
@@ -404,8 +394,8 @@ def train(cfg: Dict[str, Any]):
     amp_dtype = DTYPE_MAP[cfg["train"]["amp_dtype"]]
     use_amp = cfg["train"]["use_amp"]
 
-    # --- 主循环 ---
-    best_val = [float("inf")]   # 用 list 封装，便于 helper 修改
+    # --- Main loop ---
+    best_val = [float("inf")]
     global_step = 0
     best_mode = cfg["ckpt"]["best_mode"]
     best_key = cfg["ckpt"]["best_metric"]
@@ -424,7 +414,7 @@ def train(cfg: Dict[str, Any]):
         return f"{s}s"
 
     def run_val_and_maybe_save_best(cur_epoch: int, tag: str) -> None:
-        """跑一次验证集，并在指标更优时写唯一的 best-step-{step}.pt。相同步数只评一次。"""
+        """Run validation once per step and save a new best checkpoint if needed."""
         if last_eval_step[0] == global_step:
             return
         val_metrics = run_validation(
@@ -452,7 +442,7 @@ def train(cfg: Dict[str, Any]):
             tqdm.write(f"[ckpt] saved new best {best_key}={best_val[0]:.4f} -> {best_path}")
 
     def maybe_save_step_ckpt(cur_epoch: int, force: bool = False) -> None:
-        """按 step 规则保存 ckpt；force=True 时把最后一步视为命中。"""
+        """Save periodic step checkpoints; force treats the final step as eligible."""
         save_every_steps = cfg["ckpt"].get("save_every_steps") or 0
         if not force and (save_every_steps <= 0 or global_step % save_every_steps != 0):
             return
@@ -513,7 +503,7 @@ def train(cfg: Dict[str, Any]):
             optimizer.step()
             scheduler.step()
 
-            # --- 日志 ---
+            # --- Logging ---
             if is_main(rank):
                 pbar.update(1)
 
@@ -557,14 +547,14 @@ def train(cfg: Dict[str, Any]):
 
             global_step += 1
 
-            # --- step 级 ckpt / val ---
+            # --- Step checkpoints / validation ---
             maybe_save_step_ckpt(epoch)
 
             val_every_steps = cfg["train"].get("val_every_steps") or 0
             if val_every_steps > 0 and global_step % val_every_steps == 0:
                 run_val_and_maybe_save_best(epoch, tag="step")
 
-        # --- epoch 末: val + lang 分布 ---
+        # --- Epoch-end logging / validation ---
         dt = time.time() - t0
         if is_main(rank):
             tot = sum(epoch_lang_counts.values())
@@ -578,7 +568,7 @@ def train(cfg: Dict[str, Any]):
             tqdm.write(f"[epoch {epoch} done] time={dt:.1f}s "
                        f"lang en/cn={epoch_lang_counts['en']}/{epoch_lang_counts['cn']}")
 
-            # --- epoch 级强制 ckpt ---
+            # --- Epoch checkpoints ---
             save_every_epoch = cfg["ckpt"].get("save_every_epoch") or 0
             if save_every_epoch > 0 and (epoch + 1) % save_every_epoch == 0:
                 save_ckpt(
@@ -594,7 +584,7 @@ def train(cfg: Dict[str, Any]):
         if val_every_epoch > 0 and (epoch + 1) % val_every_epoch == 0:
             run_val_and_maybe_save_best(epoch, tag="epoch")
 
-    # --- 训练结束兜底: 最后一步视为命中 step 保存/评测策略 ---
+    # --- Final save/validation guard ---
     final_epoch = cfg["train"]["epochs"] - 1
     if global_step > 0 and (cfg["ckpt"].get("save_every_steps") or 0) > 0:
         maybe_save_step_ckpt(final_epoch, force=True)
@@ -615,7 +605,7 @@ def train(cfg: Dict[str, Any]):
 
 
 # ===========================================================================
-# 入口
+# Entrypoint
 # ===========================================================================
 def parse_args():
     p = argparse.ArgumentParser()

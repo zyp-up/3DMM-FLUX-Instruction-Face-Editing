@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Stage2 正式训练启动脚本: torchrun + 8 卡 DDP + nohup 后台输出到日志
+# Stage2 training launcher: torchrun DDP with nohup logging.
 #
-# 用法:
+# Usage:
 #     bash train/train_stage2.sh
 #     CONFIG=configs/stage2.yaml bash train/train_stage2.sh
 #     EXTRA_OPTS="train.max_steps=20 train.batch_size=1" bash train/train_stage2.sh

@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# 多卡并行启动 DECA 离线参数提取
-# 用法:
-#   NGPU=8 bash scripts/run_extract_multi_gpu.sh
+# Launch offline DECA parameter extraction across multiple GPUs.
+# Usage:
+#   NGPU=8 bash scripts/run_extract_multigpu.sh
 #
-# 环境变量:
-#   NGPU        : 使用的 GPU 卡数 (= num_shards). 默认 8
-#   BATCH_SIZE  : 每卡 batch size. 默认 32
-#   NUM_WORKERS : 每卡 DataLoader worker 数. 默认 16
-#   EXTRACT_TAG : 日志与 PID 文件的后缀, 便于区分多批提取任务. 默认 $(date +%Y%m%d_%H%M%S)
-# 修改 SRC_ROOTS / OUT_ROOTS 来指定要提取的数据集 (两个数组一一对应).
+# Environment variables:
+#   NGPU        : number of GPUs / shards. Default: 8
+#   BATCH_SIZE  : per-GPU batch size. Default: 32
+#   NUM_WORKERS : DataLoader workers per GPU. Default: 16
+#   EXTRACT_TAG : suffix for logs and PID files. Default: $(date +%Y%m%d_%H%M%S)
+# Edit SRC_ROOTS / OUT_ROOTS to choose datasets; entries are matched by index.
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
-# ====== 项目根目录 ======
+# ====== Project root ======
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# ====== 可调参数 ======
+# ====== Options ======
 NGPU="${NGPU:-8}"
 BATCH_SIZE="${BATCH_SIZE:-32}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
 EXTRACT_TAG="${EXTRACT_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
-# ====== 数据集列表 (src -> out 按下标一一对应) ======
+# ====== Dataset list (src -> out by index) ======
 SRC_ROOTS=(
     "./face_emoji/final_data_raf_bucket_postprocessed"
     "./face_emoji/final_data_v1_bucket_postprocessed"
@@ -34,17 +34,17 @@ OUT_ROOTS=(
 )
 
 if [[ "${#SRC_ROOTS[@]}" -ne "${#OUT_ROOTS[@]}" ]]; then
-    echo "[ERROR] SRC_ROOTS 与 OUT_ROOTS 长度必须相同" >&2
+    echo "[ERROR] SRC_ROOTS and OUT_ROOTS must have the same length" >&2
     exit 1
 fi
 
-# ====== 构造 --src_root / --out_root 参数串 ======
+# ====== Build --src_root / --out_root arguments ======
 DATASET_ARGS=()
 for i in "${!SRC_ROOTS[@]}"; do
     DATASET_ARGS+=(--src_root "${SRC_ROOTS[$i]}" --out_root "${OUT_ROOTS[$i]}")
 done
 
-# ====== 日志 + PID 目录 ======
+# ====== Logs and PID files ======
 LOG_DIR="${PROJECT_ROOT}/logs/extract_${EXTRACT_TAG}"
 PID_DIR="${LOG_DIR}/pids"
 mkdir -p "${LOG_DIR}" "${PID_DIR}"
@@ -60,7 +60,7 @@ for i in "${!SRC_ROOTS[@]}"; do
     echo "    [$i] ${SRC_ROOTS[$i]}  ->  ${OUT_ROOTS[$i]}"
 done
 
-# ====== 逐卡 nohup 后台启动 ======
+# ====== Launch one background shard per GPU ======
 for ((r=0; r<NGPU; r++)); do
     LOG_FILE="${LOG_DIR}/shard_${r}.log"
     echo "[launch] starting shard ${r}/${NGPU} on GPU ${r}, log=${LOG_FILE}"

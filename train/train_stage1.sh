@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Stage1 正式训练启动脚本: torchrun + 8 卡 DDP + nohup 后台输出到日志
+# Stage1 training launcher: torchrun DDP with nohup logging.
 #
-# 用法:
-#     bash train/train_stage1.sh                       # 直接启动 (使用下方 GPUS 中指定的卡)
+# Usage:
+#     bash train/train_stage1.sh                       # use GPUs from GPUS below
 #     CONFIG=configs/stage1.yaml bash train/train_stage1.sh
 #     EXTRA_OPTS="train.lr=5e-5 data.batch_size=16" bash train/train_stage1.sh
 #
-# 日志:
+# Logs:
 #     logs/train_stage1/<timestamp>/train.log  -- stdout + stderr
-#     logs/train_stage1/<timestamp>/pid.txt    -- torchrun 的 pid, 便于停止
+#     logs/train_stage1/<timestamp>/pid.txt    -- torchrun pid for shutdown
 #
-# 停止训练:
+# Stop:
 #     kill $(cat logs/train_stage1/<timestamp>/pid.txt)
 # =============================================================================
 set -euo pipefail
 
-# ----------- 切到项目根 (脚本位于 train/ 下, 其父目录即项目根) -----------
+# ----------- Enter project root -----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
@@ -26,21 +26,21 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 export CUDA_VISIBLE_DEVICES="${GPUS}"
 NGPU=$(awk -F',' '{print NF}' <<< "${GPUS}")
 
-# ----------- 其他可配置参数 (仍支持环境变量覆盖) -----------
+# ----------- Runtime options -----------
 CONFIG="${CONFIG:-configs/stage1.yaml}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 MASTER_PORT="${MASTER_PORT:-29500}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 TORCHRUN_BIN="${TORCHRUN_BIN:-torchrun}"
 
-# ----------- 准备日志目录 -----------
+# ----------- Log directory -----------
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="logs/train_stage1/${TIMESTAMP}"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/train.log"
 PID_FILE="${LOG_DIR}/pid.txt"
 
-# ----------- 组装 torchrun 命令 -----------
+# ----------- Build torchrun command -----------
 CMD="${TORCHRUN_BIN} --standalone --nproc_per_node=${NGPU} --master_port=${MASTER_PORT} train/train_stage1.py --config ${CONFIG}"
 if [[ -n "${EXTRA_OPTS}" ]]; then
   CMD="${CMD} --opts ${EXTRA_OPTS}"
@@ -49,7 +49,7 @@ fi
 PYTHON_PATH="$(command -v "${PYTHON_BIN}")"
 TORCHRUN_PATH="$(command -v "${TORCHRUN_BIN}")"
 
-# ----------- 打印 & 落盘启动信息 -----------
+# ----------- Print and save launch info -----------
 {
   echo "============================================================"
   echo " Stage1 training launched"
@@ -86,7 +86,7 @@ if missing:
 print('[precheck] python dependency check passed')
 PY
 
-# ----------- nohup 后台启动 -----------
+# ----------- Launch in background -----------
 nohup bash -c "${CMD}" > "${LOG_FILE}" 2>&1 &
 TRAIN_PID=$!
 echo "${TRAIN_PID}" > "${PID_FILE}"

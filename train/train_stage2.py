@@ -165,11 +165,8 @@ class BucketBatchSampler(Sampler[List[int]]):
         self.epoch = int(epoch)
 
     def _batches(self) -> List[List[int]]:
-        # 各 rank 在每个 bucket 内必须拿到相同数量的样本, 否则 batch 数不齐,
-        # DDP 训练/验证里的 all_reduce 会出现 SeqNum 错位 → NCCL watchdog 超时。
-        # 做法: 每个 bucket 先 shuffle, 再 trim 到 world_size 的整数倍 (丢弃尾部不足部分),
-        # 再按 rank 切片, 这样所有 rank 的 idxs 长度严格相同。
-        # 注意: 这里 "丢弃" 只发生在 bucket 尾部不能被 world_size 整除的小段, 量级可忽。
+        # Keep equal batch counts per rank to avoid DDP all_reduce sequence drift.
+        # Each bucket is trimmed to a multiple of world_size before rank slicing.
         rng = random.Random(self.seed + self.epoch)
         batches: List[List[int]] = []
         for idxs in self.buckets.values():
@@ -344,7 +341,7 @@ def _pack_latents_fallback(latents: torch.Tensor) -> torch.Tensor:
 
 
 def _prepare_img_ids_fallback(batch_size: int, token_h: int, token_w: int, device, dtype, t_coord: float = 0.0):
-    # 对齐官方 flux2.sampling.prc_img: x_ids = cartesian_prod(t, h, w, l)。
+    # Match official flux2.sampling.prc_img: x_ids = cartesian_prod(t, h, w, l).
     ys = torch.arange(token_h, device=device, dtype=dtype)
     xs = torch.arange(token_w, device=device, dtype=dtype)
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
@@ -426,10 +423,8 @@ def decode_control_9ch(
     ref_image: torch.Tensor,
     use_alpha_mask: bool = True,
 ) -> torch.Tensor:
-    # deca.decode 要求 codedict 里带 'images' (内部要 batch_size = images.shape[0],
-    # 以及 light/render 时用于尺寸/贴图参考)。
-    # 我们的 code 来自离线 .pt, 不包含 images, 这里把 dataset 的
-    # ref_image (B,3,224,224) 补上。不修改原 code dict (避免污染下游 compose)。
+    # deca.decode needs images for batch size and rendering reference data.
+    # Offline .pt codes do not contain images, so attach ref_image locally.
     code_fp32 = {
         k: (v.float() if torch.is_tensor(v) and v.is_floating_point() else v)
         for k, v in code.items()
@@ -462,9 +457,7 @@ def forward_stage2_batch(batch, stage1_model, control_mixer, deca, pipe, loss_fn
     prompts = batch['prompts']
     ref_code = code_to_device(batch['ref_params'], device)
 
-    # ① 统一的文本编码: 一次 Qwen3 forward, 两路输出
-    #    - prompt_embeds(7680): FLUX 原版路径, 送入 transformer
-    #    - text_hidden_for_stage1(7680): 同一份 FLUX prompt_embeds, 送入 stage1 encoder
+    # Shared text encoding for both FLUX transformer and Stage1.
     prompt_embeds, text_hidden_for_stage1, text_attn_mask, txt_ids = encode_flux_prompts(
         pipe=pipe,
         prompts=prompts,
@@ -473,14 +466,14 @@ def forward_stage2_batch(batch, stage1_model, control_mixer, deca, pipe, loss_fn
         dtype=flux_dtype,
     )
 
-    # ② Stage1 Conditional Encoder: 直接吿外部 text_last_hidden, 不再走自己的 Qwen3
+    # Stage1 consumes external text hidden states; its internal Qwen3 is dropped.
     psi_pred, jaw_pred = unwrap_model(stage1_model).predict_from_text_hidden(
         ref_image=ref_image,
         text_hidden_states=text_hidden_for_stage1,
         attention_mask=text_attn_mask,
     )
 
-    # ③ Flow Matching 输入使用 target image 原生 bucket 分辨率；ref image 作为 visual condition 不加噪
+    # Flow matching uses the target bucket size; reference latents are conditioning only.
     tgt_image_norm = tgt_image * 2.0 - 1.0
     ref_native_norm = ref_native_image * 2.0 - 1.0
     clean_latents, img_ids, token_hw = encode_image_to_flux_tokens(pipe, tgt_image_norm, sample=False, t_coord=0.0)
@@ -492,11 +485,8 @@ def forward_stage2_batch(batch, stage1_model, control_mixer, deca, pipe, loss_fn
     noisy_latents = (1.0 - t.view(-1, 1, 1)) * clean_latents + t.view(-1, 1, 1) * noise
     flow_target = noise - clean_latents
 
-    # ④ DECA 渲染 ref/tgt 控制图
-    # ref_control 恒定不需要梯度；tgt_control 默认也切断 DECA 渲染图，避免
-    # FLUX flow loss 通过 renderer 反传到 Stage1 造成巨量显存占用。
-    # Stage1 仍由 aux loss 监督；如需端到端 flow->Stage1，可把
-    # stage2.detach_deca_control 设为 false。
+    # Render ref/tgt DECA controls. By default, detach renderer outputs to keep
+    # flow loss from backpropagating through DECA into Stage1.
     detach_deca_control = bool(cfg.get('stage2', {}).get('detach_deca_control', True))
     use_alpha_mask = bool(cfg.get('data', {}).get('use_alpha_mask', True))
     with torch.no_grad():
@@ -512,15 +502,14 @@ def forward_stage2_batch(batch, stage1_model, control_mixer, deca, pipe, loss_fn
     ref_control = F.interpolate(ref_control, size=native_hw, mode='bilinear', align_corners=False)
     tgt_control = F.interpolate(tgt_control, size=native_hw, mode='bilinear', align_corners=False)
 
-    # ⑤ CMM 投射成 control tokens, 拼到 hidden_states/noise token 侧
+    # Project CMM outputs to control tokens and append them to FLUX tokens.
     control_tokens = control_mixer(tgt_control.to(flux_dtype), ref_control.to(flux_dtype), token_hw=token_hw)
     control_ids = _prepare_img_ids_fallback(
         control_tokens.shape[0], token_hw[0], token_hw[1], device, img_ids.dtype, t_coord=20.0
     )
     model_input = torch.cat([noisy_latents, ref_latents, control_tokens], dim=1)
     model_img_ids = torch.cat([img_ids, ref_img_ids, control_ids], dim=1)
-    # FLUX.2-klein-base 是非蒸馏模型 (transformer.config.guidance_embeds=False), 必须传 guidance=None;
-    # 传 distilled guidance 张量会破坏 timestep embedding, 训出来的模型推理就是乱码 (诊断 #6 验证)
+    # FLUX.2-klein-base is non-distilled; guidance must be None.
     flow_pred_full = pipe.transformer(hidden_states=model_input, encoder_hidden_states=prompt_embeds, timestep=t, img_ids=model_img_ids, txt_ids=txt_ids, guidance=None, return_dict=True).sample
     flow_pred = flow_pred_full[:, :clean_latents.shape[1], :]
     return loss_fn(flow_pred=flow_pred, flow_tgt=flow_target, psi_pred=psi_pred, jaw_pred=jaw_pred, psi_tgt=psi_tgt, jaw_tgt=jaw_tgt)
@@ -532,11 +521,7 @@ def run_validation(stage1_model, control_mixer, deca, pipe, loss_fn, val_loader,
     agg = {'flow': 0.0, 'aux_total': 0.0, 'psi_mse': 0.0, 'jaw_mse': 0.0, 'reg_psi': 0.0, 'reg_jaw_roll': 0.0, 'reg_jaw_close': 0.0, 'total': 0.0}
     n_batches = 0
 
-    # — 跨 rank 对齐验证集 batch 数 —
-    # BucketBatchSampler 按 bucket 按 rank 切片, 各 rank 的 len(val_loader) 可能不一样。
-    # 如果不对齐, 后面的 reduce_mean(...) 会在不同 rank 上被调用不同次数,
-    # 导致 NCCL ALLREDUCE SeqNum 不一致 → watchdog 600s 超时。
-    # 这里先全局取 min, 只跑最小 batch 数, 多余样本丢弃 (对验证指标影响可忽)。
+    # Align validation batch counts across ranks before reduce_mean calls.
     local_n = len(val_loader)
     if dist.is_initialized():
         n_t = torch.tensor([local_n], device=device, dtype=torch.long)
@@ -686,8 +671,8 @@ def main():
     val_loader = DataLoader(
         val_set,
         batch_sampler=val_sampler,
-        num_workers=0,           # val 不启 worker: 避免与 train_loader 同时 fork 子进程
-        pin_memory=False,        # 同上, pin_memory 会拉起额外的 CUDA context
+        num_workers=0,           # Avoid concurrent DataLoader worker forks in validation.
+        pin_memory=False,        # Avoid extra CUDA context activity during validation.
         persistent_workers=False,
         collate_fn=collate,
     )
@@ -708,9 +693,8 @@ def main():
     )
     stage1_model = stage1_model.to(device)
     stage1_model.train()
-    # 注: pipe.transformer 参数已冻结，但需要对输入侧 control_tokens 求梯度，
-    #     因此 transformer backward 仍会保存激活；上面的 gradient checkpointing
-    #     能显著降低这部分显存，代价是训练速度变慢。
+    # The frozen transformer still stores activations because gradients are needed
+    # for input-side control tokens; checkpointing trades speed for memory.
 
     control_mixer = Flux2ControlMixer(
         hidden_dim=cfg["model"]["control_mixer_hidden_dim"],

@@ -9,9 +9,9 @@ conda install -y -c conda-forge mpi4py dlib scikit-learn "scikit-image<0.25" tqd
 
 pip install -r requirements.txt
 
-# 若需要 PyTorch3D，请使用本地源码安装（不要直接使用 pytorch3d channel 的旧包）
+# Install PyTorch3D from source when needed; avoid stale channel builds.
 # git clone https://github.com/facebookresearch/pytorch3d.git
 # cd pytorch3d
 # pip install --no-build-isolation -e .
-# 说明：使用 --no-build-isolation 是为了强制复用当前环境里的 torch；
-# 若直接 pip install -e .，可能在隔离构建环境中报 No module named 'torch'。
+# --no-build-isolation forces the build to reuse the active torch install and
+# avoids missing-torch errors inside an isolated build environment.

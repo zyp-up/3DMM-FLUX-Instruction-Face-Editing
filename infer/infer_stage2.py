@@ -1,45 +1,42 @@
 # -*- coding: utf-8 -*-
-"""
-Stage2 推理脚本:
-输入一张参考图 + 文本指令，输出:
-1) Stage1 预测得到的目标控制图 D_T (rendered/normal/albedo)
-2) 参考控制图 D_R (rendered/normal/albedo)
-3) FLUX.2 生成图像 (默认已开启 Reference Control Guidance / RCG)
-4) 中间 tensor 便于调试 (control_9ch / tokens / latent)
+"""Stage2 inference with Reference Control Guidance.
 
-用法 (以下 4 条示例命令自包含、可独立复现, 不依赖任何默认值兜底):
-# 1）默认用法: 启用 RCG, λ 从 yaml 读取 (默认 3.0)
+The script predicts target DECA controls, mixes them with the reference controls,
+and runs FLUX.2 image editing. It can also save intermediate controls/tokens.
+
+Examples:
+# 1) Default RCG from YAML.
 python infer/infer_stage2.py \
   --config configs/infer_stage2.yaml \
-  --ref 原图.png \
+  --ref reference.png \
   --prompt "make her burst into laughter" \
   --stage2_ckpt ./checkpoints/stage2/stage2-20260508-232246/best-step-3480.pt \
   --output_dir ./output_stage2
 
-# 2）命令行 sweep RCG 系数 λ (说明: λ 接受任意 float, 以下为推荐起点)
+# 2) Sweep RCG lambda.
 for LAM in 0.0 1.0 3.0 5.0 7.0; do
   python infer/infer_stage2.py \
     --config configs/infer_stage2.yaml \
-    --ref 原图.png \
+    --ref reference.png \
     --prompt "make her burst into laughter" \
     --stage2_ckpt ./checkpoints/stage2/stage2-20260507-161431/best-step-1920.pt \
     --rcg_lambda ${LAM} \
     --output_dir ./output_stage2/sweep_lambda_${LAM}
 done
 
-# 3）关掉 RCG 做 A/B 对照 (仍使用 ref_latents + CMM(D_T, D_R), 只是不做两路外推)
+# 3) Disable RCG for A/B comparison.
 python infer/infer_stage2.py \
   --config configs/infer_stage2.yaml \
-  --ref 原图.png \
+  --ref reference.png \
   --prompt "make her burst into laughter" \
   --stage2_ckpt ./checkpoints/stage2/stage2-20260507-161431/best-step-1920.pt \
   --rcg_enabled false \
   --output_dir ./output_stage2/no_rcg
 
-# 4）临时覆盖 yaml 任意字段 (例: 一次性改分辨率/步数/RCG系数)
+# 4) Override YAML fields for one run.
 python infer/infer_stage2.py \
   --config configs/infer_stage2.yaml \
-  --ref 原图.png \
+  --ref reference.png \
   --prompt "smile" \
   --stage2_ckpt ./checkpoints/stage2/stage2-20260507-161431/best-step-1920.pt \
   --opts sampling.num_inference_steps=28 sampling.height=512 sampling.width=512 \
@@ -118,7 +115,7 @@ def apply_opts(cfg: dict, opts):
         return cfg
     for kv in opts:
         if "=" not in kv:
-            raise ValueError(f"--opts 项必须形如 key.path=value, 收到: {kv!r}")
+            raise ValueError(f"--opts item must be key.path=value, got: {kv!r}")
         k, v = kv.split("=", 1)
         cur = cfg
         parts = k.strip().split(".")
@@ -165,12 +162,7 @@ def build_stage1_from_ckpt(
     device: str,
     stage2_ckpt_path: str = None,
 ):
-    """Build ConditionalDECAEncoder:
-      - structure cfg  ← stage1 ckpt ['cfg']['model']  (只用于实例化)
-      - weights        ← stage2 ckpt ['stage1_model']  (端到端微调后的版本, 首选)
-                         fallback → stage1 ckpt ['model']  (只有旧 ckpt 或调试用)
-    这样可以保证推理时使用的 conditional encoder 与 CMM 是同一次训练联合优化的版本。
-    """
+    """Build Stage1 from structure config and prefer Stage2 fine-tuned weights."""
     ckpt = torch.load(stage1_ckpt_path, map_location="cpu")
     if "cfg" not in ckpt or "model" not in ckpt["cfg"]:
         raise ValueError("Stage1 checkpoint missing cfg.model")
@@ -201,8 +193,8 @@ def build_stage1_from_ckpt(
         state_dict = ckpt["model"] if "model" in ckpt else ckpt
         allowed_missing = ckpt.get("excluded_state_dict_prefixes", ["text_encoder."]) if isinstance(ckpt, dict) else ["text_encoder."]
         weight_src = f"stage1_ckpt:{Path(stage1_ckpt_path).name}['model']  (FALLBACK)"
-        print("[Stage1][WARN] stage2 ckpt 里没找到 'stage1_model' key, 回退到 stage1 老权重; "
-              "推理结果与端到端训练的 CMM 可能不完全对齐。")
+        print("[Stage1][WARN] stage2 checkpoint has no 'stage1_model'; falling back to Stage1 weights. "
+              "CMM and Conditional Encoder may be less aligned.")
 
     missing, unexpected = load_stage1_checkpoint_state_dict(model, state_dict, allowed_missing)
     print(f"[Stage1] weights loaded from {weight_src}: "
@@ -224,7 +216,7 @@ def build_control_mixer(cfg: dict, stage2_ckpt_path: str, device: str, dtype: to
     state = ckpt.get("control_mixer", ckpt)
     missing, unexpected = mixer.load_state_dict(state, strict=False)
     print(f"[Stage2] control_mixer loaded: missing={len(missing)}, unexpected={len(unexpected)}")
-    # CMM 必须与 pipe (FLUX2 transformer) 同 dtype, 否则 context_embedder 的 F.linear 会 dtype mismatch
+    # CMM must match the FLUX transformer dtype to avoid F.linear dtype mismatches.
     mixer.to(device=device, dtype=dtype)
     mixer.eval()
     return mixer
@@ -247,7 +239,7 @@ def _unpack_latents_fallback(tokens: torch.Tensor, token_h: int, token_w: int) -
 
 
 def _prepare_img_ids_fallback(batch_size: int, token_h: int, token_w: int, device, dtype, t_coord: float = 0.0):
-    # 对齐官方 flux2.sampling.prc_img: x_ids = cartesian_prod(t, h, w, l)。
+    # Match official flux2.sampling.prc_img: x_ids = cartesian_prod(t, h, w, l).
     ys = torch.arange(token_h, device=device, dtype=dtype)
     xs = torch.arange(token_w, device=device, dtype=dtype)
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
@@ -304,10 +296,11 @@ def encode_image_to_flux_tokens(pipe, image: torch.Tensor, sample: bool = False,
 
 @torch.no_grad()
 def encode_flux_prompts(pipe, prompts, max_length: int, device: str, dtype: torch.dtype):
-    """与训练端 encode_flux_prompts 简直一致:
+    """Match the training-side encode_flux_prompts path.
+
     - prompt_embeds_flux (B, L, 7680): FLUX.2 concat Qwen3 layers 9/18/27, shared by transformer and Stage1
-    - text_attn_mask     (B, L)      : Stage1 cross-attn 用
-    - txt_ids            (B, L, 4)   : FLUX rope ids
+    - text_attn_mask     (B, L): Stage1 cross-attention mask
+    - txt_ids            (B, L, 4): FLUX rope ids
     """
     prompt_embeds_flux, _ = pipe.encode_prompt(
         prompt=list(prompts),
@@ -382,7 +375,7 @@ def run_infer(args, cfg):
 
     ref_crop = sample["image"].unsqueeze(0).to(device)
 
-    # ① 统一的文本编码: FLUX.2 prompt_embeds (7680) 同时供 transformer 和 Stage1 使用
+    # Shared FLUX.2 prompt embeddings for transformer and Stage1.
     max_text_len = int(cfg.get("text", {}).get("max_sequence_length", 512))
     prompt_embeds, text_hidden_for_stage1, text_attn_mask, txt_ids = encode_flux_prompts(
         pipe, [args.prompt], max_text_len, device, flux_dtype,
@@ -391,7 +384,7 @@ def run_infer(args, cfg):
     # ② DECA encode ref
     code_ref = deca.encode(ref_crop)
 
-    # ③ Stage1 Conditional Encoder: 走 predict_from_text_hidden, 与 Stage1 训练时 bit-exact 对齐
+    # Stage1 consumes the same prompt hidden states used during training.
     psi_pred, jaw_pred = stage1_model.predict_from_text_hidden(
         ref_image=ref_crop,
         text_hidden_states=text_hidden_for_stage1,
@@ -437,17 +430,16 @@ def run_infer(args, cfg):
         tgt_control, size=(infer_size, infer_size), mode="bilinear", align_corners=False
     )
 
-    # ---- RCG (Reference Control Guidance) 对齐 ControlFace 官方 pipeline_point.py ----
-    # 官方公式:
-    #   eps_ref = eps_theta(x_t, t, e_text, CMM(D_R, D_R))   # 两路都喂 D_R → "不变化" 预测
-    #   eps_tgt = eps_theta(x_t, t, e_text, CMM(D_T, D_R))   # 目标表情预测
+    # ---- RCG (Reference Control Guidance) ----
+    #   eps_ref = eps_theta(x_t, t, e_text, CMM(D_R, D_R))
+    #   eps_tgt = eps_theta(x_t, t, e_text, CMM(D_T, D_R))
     #   eps = eps_ref + λ * (eps_tgt - eps_ref)
     rcg_cfg = cfg.get("sampling", {}).get("rcg", {}) or {}
     rcg_enabled = bool(rcg_cfg.get("enabled", False))
     rcg_lambda = float(rcg_cfg.get("lambda", 1.0))
     batch_length = 2 if rcg_enabled else 1
 
-    # 文本特征在前面已经 encode 过一次 (prompt_embeds / txt_ids), 这里直接用。
+    # Reuse text features encoded above.
     encoder_hidden_states = prompt_embeds.to(flux_dtype)
     txt_ids_full = txt_ids
 
@@ -455,9 +447,7 @@ def run_infer(args, cfg):
     w = int(args.width)
     latent_h = h // 8
     latent_w = w // 8
-    # 与训练端 encode_image_to_flux_tokens 一致:
-    #   token_h = latents.shape[2] // 2 = H/8/2 = H/16  (不区分 no_pack/pack 分支)
-    #   in_channels (DiT) = vae_latent_channels * 4 (因为 2x2 pack)
+    # Match training-side latent packing: token grid is H/16 by W/16.
     in_channels = int(pipe.transformer.config.in_channels)
     vae_latent_channels = int(getattr(pipe.vae.config, "latent_channels", in_channels // 4))
     token_h = latent_h // 2
@@ -479,8 +469,7 @@ def run_infer(args, cfg):
 
     img_ids = _prepare_img_ids_fallback(1, token_h, token_w, device, latents.dtype, t_coord=0.0)
 
-    # CMM 已经 to(flux_dtype), 9ch 控制图 (fp32 DECA 输出) 也要对齐, 否则 Conv2d 会 dtype mismatch。
-    # control tokens concat 到 FLUX hidden_states/noise token 侧, 维度必须等于 in_channels=128。
+    # Align control-map dtype with CMM and match FLUX token width.
     control_tokens_tgt = mixer(tgt_control_r.to(flux_dtype), ref_control_r.to(flux_dtype), token_hw=(token_h, token_w))
     if rcg_enabled:
         control_tokens_ref = mixer(ref_control_r.to(flux_dtype), ref_control_r.to(flux_dtype), token_hw=(token_h, token_w))
@@ -499,8 +488,7 @@ def run_infer(args, cfg):
         img_ids_full = img_ids_tgt
     scheduler = pipe.scheduler
 
-    # FLUX.2 scheduler 开启 use_dynamic_shifting=True, 需要按当前 image_seq_len 计算 mu
-    # 并以 sigmas=linspace(1.0, 1/N, N) + mu 的方式调 set_timesteps (官方 FluxPipeline 做法)。
+    # FLUX.2 dynamic shifting needs mu based on the current image sequence length.
     image_seq_len = seq  # token_h * token_w
     sched_cfg = getattr(scheduler, "config", None)
     base_seq_len = int(getattr(sched_cfg, "base_image_seq_len", 256)) if sched_cfg else 256
@@ -508,7 +496,7 @@ def run_infer(args, cfg):
     base_shift = float(getattr(sched_cfg, "base_shift", 0.5)) if sched_cfg else 0.5
     max_shift = float(getattr(sched_cfg, "max_shift", 1.15)) if sched_cfg else 1.15
 
-    # 优先用 diffusers 自带 calculate_shift, 不可用则回退手写公式
+    # Prefer diffusers' calculate_shift when available.
     mu = None
     try:
         from diffusers.pipelines.flux.pipeline_flux import calculate_shift as _calc_shift
@@ -520,18 +508,16 @@ def run_infer(args, cfg):
     try:
         scheduler.set_timesteps(sigmas=sigmas, mu=mu, device=device)
     except TypeError:
-        # 更老版本的 diffusers scheduler 不接受 mu kwarg
+        # Older diffusers schedulers may not accept mu.
         scheduler.set_timesteps(args.num_inference_steps, device=device)
 
     if rcg_enabled:
-        print(f"[RCG] enabled: lambda={rcg_lambda} (FLUX.2-klein 非蒸馏模型, transformer guidance 固定为 None)")
+        print(f"[RCG] enabled: lambda={rcg_lambda} (FLUX.2-klein is non-distilled; transformer guidance is None)")
     else:
-        print("[RCG] disabled: 单路 image-editing 条件 (latents + ref_latents + CMM(D_T, D_R))")
+        print("[RCG] disabled: single image-editing path (latents + ref_latents + CMM(D_T, D_R))")
 
-    # 训练端 (train_stage2.py L426) 使用 t = torch.rand(...) ∈ [0, 1] 作为 timestep 送入 transformer；
-    # 而 FLUX 的 FlowMatchEulerDiscreteScheduler.timesteps 范围是 [0, num_train_timesteps] (通常 1000)。
-    # 若直接喂原始 t 给 transformer, time embedding 量级错位 1000 倍, 产生的 flow 是随机方向, 解码出来是纯噪声。
-    # 这里把 t 归一化到 [0, 1] 再送入 transformer, 与训练语义严格对齐; scheduler.step 仍用原始 t。
+    # Training feeds normalized timesteps in [0, 1] to the transformer; scheduler
+    # updates still use the original scheduler timestep.
     num_train_timesteps = float(getattr(scheduler.config, "num_train_timesteps", 1000))
     for t in scheduler.timesteps:
         t_norm = float(t) / num_train_timesteps
@@ -542,8 +528,7 @@ def run_infer(args, cfg):
             latent_model_input = torch.cat([latent_ref, latent_tgt], dim=0)
         else:
             latent_model_input = torch.cat([latents, ref_latents, control_tokens_tgt], dim=1)
-        # FLUX.2-klein-base 非蒸馏 (transformer.config.guidance_embeds=False), 必须传 guidance=None;
-        # 原代码传 torch.full((B,), 4.0) 会破坏 timestep embedding, 输出乱码 (诊断 #6 验证)
+        # FLUX.2-klein-base is non-distilled; guidance must stay None.
         pred = pipe.transformer(
             hidden_states=latent_model_input,
             encoder_hidden_states=encoder_hidden_states,
@@ -555,42 +540,35 @@ def run_infer(args, cfg):
         ).sample
         pred = pred[:, :latents.shape[1], :]
         if rcg_enabled:
-            # 官方: noise_pred_ref, noise_pred_all = noise_pred.chunk(2)
+            # Same two-branch split as the official RCG implementation.
             noise_pred_ref, noise_pred_tgt = pred.chunk(2, dim=0)
             pred = noise_pred_ref + rcg_lambda * (noise_pred_tgt - noise_pred_ref)
         latents = scheduler.step(pred, t, latents, return_dict=True).prev_sample
 
-    # =========== VAE 反归一化 + unpack: 严格镜像 train_stage2.encode_image_to_flux_tokens =========
-    # 训练端两种分支 (以 num_features 为判据):
-    #   (A) num_features == packed.last_dim (= in_channels)  → 在 packed (B, seq, 128) 上做
-    #       正向: packed = (packed - mean) / std
-    #       逆向: packed = packed * std + mean  → unpack → latents
-    #   (B) num_features == latents.dim1 (= vae_latent_channels)  → 在 latents (B, 32, H, W) 上做
-    #       正向: latents = (latents - mean) / std → pack → packed
-    #       逆向: unpack packed → latents → latents = latents * std + mean
+    # Mirror training-side VAE denormalization before unpacking.
     packed = latents  # (1, seq, in_channels)
     lat_4d = None
     if hasattr(pipe.vae, "bn") and hasattr(pipe.vae.bn, "running_mean"):
         eps = getattr(pipe.vae.config, "batch_norm_eps", 1e-4)
         num_features = pipe.vae.bn.running_mean.numel()
         if num_features == packed.shape[-1]:
-            # 分支 (A): 在 packed last-dim 上反归一化, 再 unpack
+            # Denormalize packed tokens, then unpack.
             mean = pipe.vae.bn.running_mean.view(1, 1, -1).to(packed.device, packed.dtype)
             std = torch.sqrt(pipe.vae.bn.running_var.view(1, 1, -1).to(packed.device, packed.dtype) + eps)
             packed = packed * std + mean
             lat_4d = _unpack_latents_fallback(packed, token_h, token_w)
         elif num_features == vae_latent_channels:
-            # 分支 (B): 先 unpack 到 (B, 32, H, W), 再在 dim=1 上反归一化
+            # Unpack first, then denormalize latent channels.
             lat_4d = _unpack_latents_fallback(packed, token_h, token_w)
             mean = pipe.vae.bn.running_mean.view(1, -1, 1, 1).to(lat_4d.device, lat_4d.dtype)
             std = torch.sqrt(pipe.vae.bn.running_var.view(1, -1, 1, 1).to(lat_4d.device, lat_4d.dtype) + eps)
             lat_4d = lat_4d * std + mean
         else:
-            print(f"[VAE-denorm][WARN] bn.num_features={num_features} 不匹配 "
-                  f"packed.last_dim={packed.shape[-1]} 也不匹配 vae_latent_channels={vae_latent_channels}, "
-                  "跳过反归一化 (可能导致解码图偏色/偏亮)")
+            print(f"[VAE-denorm][WARN] bn.num_features={num_features} matches neither "
+                  f"packed.last_dim={packed.shape[-1]} nor vae_latent_channels={vae_latent_channels}; "
+                  "skipping denormalization")
     if lat_4d is None:
-        # 没有 bn 或者 num_features 不匹配 → 直接 unpack 不做反归一化
+        # No usable batch norm stats; unpack directly.
         lat_4d = _unpack_latents_fallback(packed, token_h, token_w)
 
     image = pipe.vae.decode(lat_4d, return_dict=False)[0]
@@ -652,18 +630,18 @@ def parse_args():
         "--config",
         type=str,
         default=str((PROJECT_ROOT / "configs" / "infer_stage2.yaml").resolve()),
-        help="推理 YAML, 默认 configs/infer_stage2.yaml",
+        help="inference YAML; default: configs/infer_stage2.yaml",
     )
     parser.add_argument(
         "--opts",
         nargs="*",
         default=None,
-        help="dot-path 覆盖 YAML, 例如 sampling.num_inference_steps=28 sampling.rcg.lambda=3.5",
+        help="override YAML via dot-path, e.g. sampling.num_inference_steps=28 sampling.rcg.lambda=3.5",
     )
-    # ---- per-call 必填 ----
-    parser.add_argument("--ref", type=str, required=True, help="参考人脸图像路径")
-    parser.add_argument("--prompt", type=str, required=True, help="文本指令")
-    # ---- 这些都可选: 不给就从 YAML 读 ----
+    # ---- Required per call ----
+    parser.add_argument("--ref", type=str, required=True, help="reference face image path")
+    parser.add_argument("--prompt", type=str, required=True, help="text instruction")
+    # ---- Optional; defaults come from YAML ----
     parser.add_argument("--stage1_ckpt", type=str, default=None)
     parser.add_argument("--stage2_ckpt", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
@@ -673,16 +651,16 @@ def parse_args():
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--num_inference_steps", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
-    # ---- RCG 快捷覆盖 (等价于 --opts sampling.rcg.xxx=yyy) ----
+    # ---- RCG shortcut overrides ----
     parser.add_argument("--rcg_lambda", type=float, default=None,
-                        help="Reference Control Guidance 系数λ; 覆盖 yaml sampling.rcg.lambda")
+                        help="Reference Control Guidance lambda; overrides sampling.rcg.lambda")
     parser.add_argument("--rcg_enabled", type=lambda s: str(s).lower() in {"1", "true", "yes"},
-                        default=None, help="是否启用 RCG; 覆盖 yaml sampling.rcg.enabled")
+                        default=None, help="enable RCG; overrides sampling.rcg.enabled")
     return parser.parse_args()
 
 
 def _fill_from_cfg(args, cfg):
-    """CLI 未给的字段, 从 YAML 里兜底。"""
+    """Fill missing CLI fields from YAML."""
     sampling = cfg.get("sampling", {})
     output = cfg.get("output", {})
     deca = cfg.get("deca", {})
@@ -706,7 +684,7 @@ def _fill_from_cfg(args, cfg):
     if args.seed is None:
         args.seed = int(sampling.get("seed", 42))
 
-    # ---- RCG CLI 覆盖 ----
+    # ---- RCG CLI overrides ----
     rcg_cfg = sampling.setdefault("rcg", {})
     if args.rcg_lambda is not None:
         rcg_cfg["lambda"] = float(args.rcg_lambda)

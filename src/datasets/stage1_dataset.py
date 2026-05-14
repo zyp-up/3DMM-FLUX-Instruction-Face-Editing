@@ -1,32 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Stage1 Dataset: Conditional DECA Encoder 的训练数据集.
+"""Stage1 dataset for supervised Conditional DECA Encoder training.
 
-输入 jsonl 每条样本:
-    {
-      "pair_id": ...,
-      "image_a_path": "./data/.../{bucket}/{exp_a}/{name}.JPG",  # 参考图
-      "image_b_path": "./data/.../{bucket}/{exp_b}/{name}.JPG",  # 目标图
-      "instruction_en": [5 条英文指令, list],
-      ... (其余字段不用)
-    }
-
-Dataset 在 __getitem__ 做:
-    1) 读 image_a, 在线 FAN 检测 + 仿射 crop 到 224x224  -> ref_image
-    2) 根据 image_b_path 映射出 {params_root}/{bucket}/{exp_b}/{name}.pt
-       读 .pt 中的 exp[:50] 作 psi_Tgt, pose[3:6] 作 jaw_Tgt
-    3) 从 instruction_en / instruction_cn 各 5 条里伯努利抽样 1 条:
-         lang_prob_en 概率抽英文, 1-lang_prob_en 概率抽中文 (默认 0.5).
-         独立随机 -> 能让同一样本跨 epoch 看到不同语言指令, 算作文本侧数据增强.
-         单 epoch 中/英文比例期望 50/50, 会有 ±√(N/4) 的波动 (N=3014 时 ±27)。
-
-collate_fn:
-    batch 内统一 tokenize 并 padding (传入的 tokenizer 是 Qwen3 tokenizer).
-
-注:
-    - 我们复用 scripts/extract_deca_params.py 的 FAN crop 协议
-      (bbox 扩成正方形, 再 resize 到 224, 与 DECA 原始输入一致).
-    - FAN 未检测到人脸时降级为整图 resize 224, 并在 batch 里返回 fan_detected=False.
+Each sample uses image_a as the reference image, maps image_b to its offline
+DECA parameter file, and samples one prompt from the configured language fields.
+FAN cropping follows the same protocol as scripts/extract_deca_params.py.
 """
 
 import json
@@ -43,16 +20,16 @@ from torch.utils.data import Dataset
 
 
 # ---------------------------------------------------------------------------
-# FAN + crop (沿用 extract_deca_params.py 里的 CPUFAN 思路, 在 worker 内懒加载)
+# FAN cropper, lazily initialized once per DataLoader worker.
 # ---------------------------------------------------------------------------
-_WORKER_FAN = None  # 每个 DataLoader worker 内单例
+_WORKER_FAN = None  # Per-worker singleton.
 
 
 def _get_worker_fan():
     global _WORKER_FAN
     if _WORKER_FAN is None:
         import face_alignment
-        # face_alignment >=1.4.0 把 _2D 重命名为 TWO_D, 这里做向下兼容
+        # face_alignment renamed _2D to TWO_D in newer releases.
         lm_enum = face_alignment.LandmarksType
         if hasattr(lm_enum, "TWO_D"):
             lm_type = lm_enum.TWO_D
@@ -65,17 +42,15 @@ def _get_worker_fan():
         _WORKER_FAN = face_alignment.FaceAlignment(
             lm_type,
             flip_input=False,
-            device="cpu",  # 关键: 避免 DataLoader fork 后 CUDA re-init
+            device="cpu",  # Avoid CUDA re-init inside forked DataLoader workers.
         )
     return _WORKER_FAN
 
 
 def _fan_run(image_np: np.ndarray):
-    """与 decalib.datasets.detectors.FAN.run 签名一致: 返回 (bbox_or_[0], bbox_type).
+    """Return (bbox_or_[0], bbox_type), matching decalib FAN.run.
 
     image: 0-255, uint8, rgb, [h, w, 3]
-    成功: ([left, top, right, bottom], 'kpt68')
-    失败: ([0], 'kpt68')
     """
     fan = _get_worker_fan()
     out = fan.get_landmarks(image_np)
@@ -90,7 +65,7 @@ def _fan_run(image_np: np.ndarray):
 
 
 def _bbox2point(left, right, top, bottom, bbox_type):
-    """完全复制自 DECA 官方 TestData.bbox2point (见 decalib/datasets/testdata.py)."""
+    """Mirror DECA TestData.bbox2point."""
     if bbox_type == "kpt68":
         old_size = (right - left + bottom - top) / 2 * 1.1
         center = np.array([
@@ -115,12 +90,12 @@ def _deca_preprocess(
     crop_scale: float = 1.25,
     crop_size: int = 224,
 ) -> Tuple[np.ndarray, np.ndarray, bool]:
-    """完全复刻 DECA 官方 TestData._process 的管线 (与 scripts/extract_deca_params.py 一致).
+    """Apply DECA TestData-style crop preprocessing.
 
     Returns:
-        dst_image: (3, crop_size, crop_size) float32 in [0, 1], CHW, 同官方 encode 输入.
-        tform_params: (3, 3) float32, similarity transform 矩阵 (Stage2 逐像素重投影用).
-        fan_detected: bool, FAN 是否成功检测到人脸.
+        dst_image: (3, crop_size, crop_size) float32 in [0, 1], CHW.
+        tform_params: (3, 3) similarity transform used by Stage2 reprojection.
+        fan_detected: whether FAN detected a face.
     """
     im = imread(image_path)
     if pre_size is not None:
@@ -135,7 +110,7 @@ def _deca_preprocess(
     bbox, bbox_type = detector_run(image)
     fan_detected = len(bbox) >= 4
     if not fan_detected:
-        # 官方兜底: 整图当 bbox, 且 bbox_type 改为 'bbox'
+        # DECA fallback: treat the full image as a bbox.
         left, right, top, bottom = 0, h - 1, 0, w - 1
         bbox_type = "bbox"
     else:
@@ -161,7 +136,7 @@ def _deca_preprocess(
 # Stage1Dataset
 # ---------------------------------------------------------------------------
 class Stage1Dataset(Dataset):
-    """Stage1 监督训练数据集."""
+    """Supervised Stage1 dataset."""
 
     def __init__(
         self,
@@ -177,14 +152,13 @@ class Stage1Dataset(Dataset):
     ):
         """
         Args:
-            sources: 每项字典需要含 {jsonl, src_root, params_root}. 支持多数据源合并.
-            image_size: ref_image 输出尺寸, 默认 224 (DECA 原版输入).
-            crop_scale: FAN bbox 扩张系数, 默认 1.25.
-            prompt_key_en / prompt_key_cn: jsonl 里英文 / 中文指令字段名.
-                值为 list 时随机抽 1 条; 若某条样本缺失某个语言字段, 会自动回落到另一个.
-            lang_prob_en: 伯努利抽样英文的概率 (默认 0.5, 即中/英 50/50).
-            use_fan: 关闭后跳过 FAN, 直接整图 bbox 走官方几何 (调试用).
-            pre_size: 官方 TestData 的预 resize 边长 (默认 256, 与 extract_deca_params 对齐).
+            sources: dicts with {jsonl, src_root, params_root}; multiple sources are merged.
+            image_size: output crop size, normally 224 for DECA.
+            crop_scale: FAN bbox expansion scale.
+            prompt_key_en / prompt_key_cn: prompt fields in JSONL.
+            lang_prob_en: probability of sampling the English prompt field.
+            use_fan: false skips FAN and uses full-image bbox.
+            pre_size: pre-resize size aligned with extract_deca_params.py.
         """
         self.image_size = image_size
         self.crop_scale = crop_scale
@@ -221,16 +195,16 @@ class Stage1Dataset(Dataset):
         return len(self.samples)
 
     # ------------------------------------------------------------------
-    # 路径映射
+    # Path mapping
     # ------------------------------------------------------------------
     def _image_to_param_path(self, image_path: str, src_root: str, params_root: str) -> str:
-        """把 image_b 在 src_root 下的相对路径映射到 params_root 下的 .pt."""
+        """Map an image path under src_root to its .pt path under params_root."""
         rel = os.path.relpath(image_path, src_root)
         rel_noext = os.path.splitext(rel)[0]
         return os.path.join(params_root, rel_noext + ".pt")
 
     # ------------------------------------------------------------------
-    # Prompt 抽取 (中英文交替采样)
+    # Prompt sampling
     # ------------------------------------------------------------------
     def _pick_from_field(self, item: Dict[str, Any], key: str) -> Optional[str]:
         val = item.get(key, None)
@@ -243,11 +217,7 @@ class Stage1Dataset(Dataset):
         return str(val)
 
     def _pick_prompt(self, item: Dict[str, Any], idx: int) -> Tuple[str, str]:
-        """伯努利抽样语言 (概率 lang_prob_en -> en), 并从对应字段里随机抽 1 条.
-        若首选语言字段缺失/为空, 自动回落到另一个语言.
-
-        idx 参数仅用于跟 random state 解耦 (无硬依赖), 保留是为了后续如果想做 
-        seeded sampling 的时候留个接口 (当前版本不用 idx)."""
+        """Sample a prompt language, falling back to the other field if needed."""
         del idx
         if random.random() < self.lang_prob_en:
             primary_key, fallback_key, lang = self.prompt_key_en, self.prompt_key_cn, "en"
@@ -265,7 +235,7 @@ class Stage1Dataset(Dataset):
         return prompt, lang
 
     # ------------------------------------------------------------------
-    # 主逻辑
+    # Main sample path
     # ------------------------------------------------------------------
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         rec = self.samples[idx]
@@ -276,9 +246,7 @@ class Stage1Dataset(Dataset):
         image_a_path = item["image_a_path"]
         image_b_path = item["image_b_path"]
 
-        # ---- 1) 完全对齐 DECA 官方 TestData._process 的预处理 ----
-        #   与 scripts/extract_deca_params.py::CropDataset._process 等价.
-        #   use_fan=False 时正常调 _fan_run 但结果会被当作 miss, 走整图 bbox 分支.
+        # ---- 1) DECA-compatible reference-image preprocessing ----
         detector_run = _fan_run if self.use_fan else (lambda _img: ([0], "kpt68"))
         dst_image, tform_params, fan_detected = _deca_preprocess(
             image_path=image_a_path,
@@ -290,20 +258,20 @@ class Stage1Dataset(Dataset):
         ref_image = torch.from_numpy(dst_image)       # (3, 224, 224) float32 in [0, 1]
         tform = torch.from_numpy(tform_params)        # (3, 3) float32
 
-        # ---- 2) 读目标参数 ----
+        # ---- 2) Load target DECA parameters ----
         pt_path = self._image_to_param_path(image_b_path, src_root, params_root)
         params = torch.load(pt_path, map_location="cpu", weights_only=True)
-        # params dict 结构: shape(100), tex(50), exp(50), pose(6), cam(3), light(27), ...
+        # Expected keys include shape, tex, exp, pose, cam, light.
         psi_tgt = params["exp"].detach().float().view(-1)                # (50,)
         pose = params["pose"].detach().float().view(-1)                  # (6,)
         jaw_tgt = pose[3:6].clone()                                      # (3,)
 
-        # ---- 3) 抽 prompt (根据 idx 奇偶交替采样中/英文) ----
+        # ---- 3) Sample prompt ----
         prompt, lang = self._pick_prompt(item, idx)
 
         return {
             "ref_image": ref_image,       # (3, 224, 224) float [0, 1]
-            "tform": tform,               # (3, 3) similarity transform, Stage2 逐像素用
+            "tform": tform,               # (3, 3) similarity transform for Stage2.
             "psi_tgt": psi_tgt,           # (50,)
             "jaw_tgt": jaw_tgt,           # (3,)
             "prompt": prompt,             # str
@@ -314,10 +282,10 @@ class Stage1Dataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
-# Collate: 批内 tokenize + pad
+# Collate: tokenize and pad per batch.
 # ---------------------------------------------------------------------------
 def build_collate_fn(tokenizer, max_length: int = 64):
-    """返回一个 collate_fn. 训练脚本里: DataLoader(..., collate_fn=build_collate_fn(tok))"""
+    """Build the collate_fn used by the training DataLoader."""
 
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         ref_image = torch.stack([b["ref_image"] for b in batch], dim=0)
@@ -362,7 +330,7 @@ def build_collate_fn(tokenizer, max_length: int = 64):
 
 
 # ---------------------------------------------------------------------------
-# 自测
+# Smoke test
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
@@ -381,7 +349,7 @@ if __name__ == "__main__":
     }])
     print(f"dataset size = {len(ds)}")
 
-    # 抽 n 条看内容
+    # Inspect a few samples.
     for i in range(min(args.n, len(ds))):
         sample = ds[i]
         print(f"\n[sample {i}]")
@@ -394,8 +362,7 @@ if __name__ == "__main__":
         print(f"  jaw_tgt       = {sample['jaw_tgt'].tolist()}")
         print(f"  fan_detected  = {sample['fan_detected']}")
 
-    # 统计一整个 epoch 中英文分布 (只跑 _pick_prompt 不读图, 很快)
-    # 因为是伯努利采样, 每次跑结果不同, 约 50/50 ±√(N/4)
+    # Estimate the prompt-language distribution without loading images.
     n_en, n_cn = 0, 0
     for i in range(len(ds)):
         _, lang = ds._pick_prompt(ds.samples[i]["item"], i)

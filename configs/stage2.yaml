@@ -19,8 +19,8 @@ data:
   max_text_length: 64
   pin_memory: true
   persistent_workers: true
-  # true: 对 DECA 控制图 (rendered/normal/albedo) 调用 alpha_images 做 mask, 背景置 0;
-  # false: 保留原图背景 (会带入头发/衣服等非几何信息)。
+  # true masks DECA control maps with alpha_images and zeros the background.
+  # false keeps the original background, including non-geometric cues.
   use_alpha_mask: true
 
 stage1:
@@ -28,8 +28,8 @@ stage1:
 
 stage2:
   resume_path: null
-  # true: flow loss 只训练 CMM，Stage1 仍由 aux loss 训练；显著降低 DECA renderer 反传显存。
-  # false: 保留 flow loss -> DECA renderer -> Stage1 的端到端反传，显存占用更高。
+  # true lets flow loss train only CMM; Stage1 still receives aux loss.
+  # false keeps flow-loss gradients through the DECA renderer into Stage1.
   detach_deca_control: true
 
 deca:
@@ -38,13 +38,13 @@ deca:
 flux:
   model_path: ./models/FLUX.2-klein-4B
   torch_dtype: bf16
-  # 注: FLUX.2-klein-base 是非蒸馏模型 (transformer.config.guidance_embeds=False),
-  # 训练和推理时 transformer 都必须传 guidance=None；条件控制由 RCG + CMM 完成。
+  # FLUX.2-klein-base is non-distilled; transformer guidance must be None.
+  # Conditional control is provided by RCG + CMM.
 
 model:
   control_mixer_hidden_dim: 512
   control_mixer_heads: 8
-  control_joint_dim: 128  # FLUX packed latent/noise token dim, concat 到 hidden_states 侧
+  control_joint_dim: 128  # FLUX packed latent/noise token dim for hidden-state concat.
   control_dropout: 0.0
 
 loss:
@@ -82,7 +82,7 @@ logging:
   wandb_run_name: null
   wandb_entity: zyp_up
   wandb_mode: online
-  wandb_api_key: null  # 可在本地填写 wandb API key；更推荐使用环境变量 WANDB_API_KEY，提交前不要写入真实密钥
+  wandb_api_key: null  # Prefer WANDB_API_KEY; do not commit real keys.
 
 ckpt:
   out_dir: ./checkpoints/stage2

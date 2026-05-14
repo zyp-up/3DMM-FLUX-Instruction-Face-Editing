@@ -462,7 +462,7 @@ python infer/infer_stage2.py --config configs/infer_stage2.yaml \
 
 ## 6. Configuration Files
 
-本仓库共有三个 yaml 配置文件，分别对应训练 / 推理的不同阶段，所有可调字段都已在文件中带详细中文注释，按需修改即可：
+本仓库共有三个 yaml 配置文件，分别对应训练 / 推理的不同阶段，所有可调字段都已在文件中带简洁英文注释，按需修改即可：
 
 | 配置文件 | 作用 |
 |---|---|
