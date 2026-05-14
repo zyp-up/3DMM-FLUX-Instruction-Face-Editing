@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500">
+<svg xmlns="http://www.w3.org/2000/svg" width="1950" height="1580" viewBox="0 0 1950 1580">
   <defs>
     <marker id="arrowBlue" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,7 L7,3.5 z" fill="#2f5597"/>
@@ -12,6 +12,41 @@
     <marker id="arrowGray" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L0,7 L7,3.5 z" fill="#334155"/>
     </marker>
+    <linearGradient id="gradInput" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fffaf3"/>
+      <stop offset="100%" stop-color="#ffead5"/>
+    </linearGradient>
+    <linearGradient id="gradFrozen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fbff"/>
+      <stop offset="100%" stop-color="#e6f0ff"/>
+    </linearGradient>
+    <linearGradient id="gradRef" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#edf6ff"/>
+      <stop offset="100%" stop-color="#cfe3ff"/>
+    </linearGradient>
+    <linearGradient id="gradTarget" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff0f0"/>
+      <stop offset="100%" stop-color="#ffd6d6"/>
+    </linearGradient>
+    <linearGradient id="gradMix" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f2faee"/>
+      <stop offset="100%" stop-color="#d9edcf"/>
+    </linearGradient>
+    <linearGradient id="gradRender" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff8da"/>
+      <stop offset="100%" stop-color="#ffedab"/>
+    </linearGradient>
+    <linearGradient id="gradFormula" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#eef3f9"/>
+    </linearGradient>
+    <linearGradient id="gradOutput" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff7db"/>
+      <stop offset="100%" stop-color="#ffe39b"/>
+    </linearGradient>
+    <filter id="softShadow" x="-6%" y="-8%" width="112%" height="118%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.2" flood-color="#0f172a" flood-opacity="0.07"/>
+    </filter>
     <style>
       .title{font:700 39px Arial,Helvetica,sans-serif;fill:#111827}
       .subtitle{font:600 20px Arial,Helvetica,sans-serif;fill:#475569}
@@ -26,21 +61,21 @@
       .tiny{font:500 12px Arial,Helvetica,sans-serif;fill:#64748b}
       .math{font:700 19px Arial,Helvetica,sans-serif;fill:#111827}
       .panel{fill:#ffffff;stroke:#d7dfec;stroke-width:2;rx:16}
-      .input{fill:#fff7ed;stroke:#ea7b25;stroke-width:2.8;rx:14}
-      .frozen{fill:#eef5ff;stroke:#6d8fbe;stroke-width:2.4;stroke-dasharray:8 6;rx:14}
-      .ref{fill:#dbeafe;stroke:#2f5597;stroke-width:2.6;rx:14}
-      .target{fill:#fde2e2;stroke:#c62828;stroke-width:2.6;rx:14}
-      .mix{fill:#e5f1dd;stroke:#4f7f32;stroke-width:2.8;rx:14}
-      .render{fill:#fff2cc;stroke:#c49a22;stroke-width:2.6;rx:14}
-      .formula{fill:#f8fafc;stroke:#334155;stroke-width:2.2;rx:14}
-      .output{fill:#fff1c2;stroke:#b7791f;stroke-width:3;rx:14}
+      .input{fill:url(#gradInput);stroke:#ea7b25;stroke-width:2.8;rx:14;filter:url(#softShadow)}
+      .frozen{fill:url(#gradFrozen);stroke:#6d8fbe;stroke-width:2.4;stroke-dasharray:8 6;rx:14}
+      .ref{fill:url(#gradRef);stroke:#2f5597;stroke-width:2.6;rx:14;filter:url(#softShadow)}
+      .target{fill:url(#gradTarget);stroke:#c62828;stroke-width:2.6;rx:14;filter:url(#softShadow)}
+      .mix{fill:url(#gradMix);stroke:#4f7f32;stroke-width:2.8;rx:14;filter:url(#softShadow)}
+      .render{fill:url(#gradRender);stroke:#c49a22;stroke-width:2.6;rx:14;filter:url(#softShadow)}
+      .formula{fill:url(#gradFormula);stroke:#334155;stroke-width:2.2;rx:14;filter:url(#softShadow)}
+      .output{fill:url(#gradOutput);stroke:#b7791f;stroke-width:3;rx:14;filter:url(#softShadow)}
       .flowBlue{fill:none;stroke:#2f5597;stroke-width:2.7;marker-end:url(#arrowBlue)}
       .flowRed{fill:none;stroke:#c62828;stroke-width:2.7;marker-end:url(#arrowRed)}
       .flowGreen{fill:none;stroke:#4f7f32;stroke-width:2.9;marker-end:url(#arrowGreen)}
       .flowGray{fill:none;stroke:#334155;stroke-width:2.5;marker-end:url(#arrowGray)}
-      .dynBlue{fill:none;stroke:#2f5597;stroke-width:3;stroke-dasharray:10 8;marker-end:url(#arrowBlue);animation:dash 1.7s linear infinite}
-      .dynRed{fill:none;stroke:#c62828;stroke-width:3;stroke-dasharray:10 8;marker-end:url(#arrowRed);animation:dash 1.7s linear infinite}
-      .dynGreen{fill:none;stroke:#4f7f32;stroke-width:3;stroke-dasharray:10 8;marker-end:url(#arrowGreen);animation:dash 1.7s linear infinite}
+      .dynBlue{fill:none;stroke:#2f5597;stroke-width:3.4;stroke-dasharray:12 8;marker-end:url(#arrowBlue);animation:dash 1.35s linear infinite}
+      .dynRed{fill:none;stroke:#c62828;stroke-width:3.4;stroke-dasharray:12 8;marker-end:url(#arrowRed);animation:dash 1.35s linear infinite}
+      .dynGreen{fill:none;stroke:#4f7f32;stroke-width:3.6;stroke-dasharray:12 8;marker-end:url(#arrowGreen);animation:dash 1.35s linear infinite}
       .pulse{animation:pulse 1.9s ease-in-out infinite}
       .blinkA{animation:fade 2.2s ease-in-out infinite}
       .blinkB{animation:fade 2.2s ease-in-out infinite;animation-delay:.75s}
@@ -50,9 +85,9 @@
     </style>
   </defs>
 
-  <rect width="1800" height="1500" fill="#ffffff"/>
-  <text x="900" y="58" text-anchor="middle" class="title">Dynamic Inference Pipeline with Reference Control Guidance</text>
-  <text x="900" y="92" text-anchor="middle" class="subtitle">RCG anchors identity with reference control and extrapolates toward the target expression at every FLUX.2 sampling step.</text>
+  <rect width="1950" height="1580" fill="#ffffff"/>
+  <text x="975" y="58" text-anchor="middle" class="title">Dynamic Inference Pipeline with Reference Control Guidance</text>
+  <text x="975" y="92" text-anchor="middle" class="subtitle">RCG anchors identity with reference control and extrapolates toward the target expression at every FLUX.2 sampling step.</text>
 
   <!-- Two clean vertical branches -->
   <rect x="95" y="140" width="740" height="735" class="panel"/>
@@ -132,10 +167,10 @@
   <rect x="935" y="1400" width="250" height="36" class="target blinkB"/>
   <text x="1060" y="1425" text-anchor="middle" class="bottomText">ε<tspan baseline-shift="sub" font-size="11">tgt</tspan></text>
 
-  <rect x="1270" y="1294" width="350" height="132" class="output"/>
-  <text x="1445" y="1338" text-anchor="middle" class="bottomLabel">Edited Image</text>
-  <text x="1445" y="1376" text-anchor="middle" class="bottomMath">X<tspan baseline-shift="sub" font-size="13">edit</tspan></text>
-  <text x="1445" y="1410" text-anchor="middle" class="bottomText">final sample</text>
+  <rect x="1390" y="1294" width="340" height="132" class="output"/>
+  <text x="1560" y="1338" text-anchor="middle" class="bottomLabel">Edited Image</text>
+  <text x="1560" y="1376" text-anchor="middle" class="bottomMath">X<tspan baseline-shift="sub" font-size="13">edit</tspan></text>
+  <text x="1560" y="1410" text-anchor="middle" class="bottomText">final sample</text>
 
   <!-- Orthogonal flows: branch-local vertical lines -->
   <path d="M465 312 L465 382" class="dynBlue"/>
@@ -143,7 +178,7 @@
   <path d="M465 652 L465 728" class="dynBlue"/>
   <path d="M465 824 L465 892 L680 892 L680 930" class="dynBlue"/>
 
-  <path d="M1335 312 L1335 382" class="flowGray"/>
+  <path d="M1335 312 L1335 382" class="dynRed"/>
   <path d="M1335 482 L1335 540" class="dynRed"/>
   <path d="M1335 652 L1335 728" class="dynRed"/>
   <path d="M1335 824 L1335 892 L1120 892 L1120 930" class="dynRed"/>
@@ -156,11 +191,11 @@
   <path d="M900 1080 L900 1122" class="dynGreen"/>
   <path d="M900 1214 L900 1268" class="dynGreen"/>
   <path d="M425 1358 L555 1358" class="flowGray"/>
-  <path d="M1245 1358 L1270 1358" class="dynGreen"/>
+  <path d="M1245 1358 L1390 1358" class="dynGreen"/>
 
   <!-- Internal RCG loop cue on FLUX block -->
-  <path d="M760 1446 L760 1464 L1040 1464 L1040 1446" class="dynGreen"/>
-  <text x="900" y="1482" text-anchor="middle" class="loopText">repeat for each timestep</text>
+  <path d="M760 1446 L760 1482 L1040 1482 L1040 1446" class="dynGreen"/>
+  <text x="900" y="1532" text-anchor="middle" class="loopText">repeat for each timestep</text>
 
   <!-- Step badges -->
   <g class="pulse">
@@ -170,8 +205,8 @@
     <text x="1335" y="516" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="#fff">2</text>
     <circle cx="900" cy="892" r="15" fill="#4f7f32"/>
     <text x="900" y="897" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="#fff">3</text>
-    <circle cx="1265" cy="1358" r="15" fill="#4f7f32"/>
-    <text x="1265" y="1363" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="#fff">4</text>
+    <circle cx="1318" cy="1332" r="15" fill="#4f7f32"/>
+    <text x="1318" y="1337" text-anchor="middle" font-family="Arial" font-size="13" font-weight="700" fill="#fff">4</text>
   </g>
 
   <!-- Legend -->
