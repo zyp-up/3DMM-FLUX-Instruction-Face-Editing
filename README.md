@@ -44,7 +44,7 @@
 
 <!-- demo-gallery-end -->
 
-## 1. 环境配置
+## 1. Environment
 
 推荐使用 `controlface310` conda 环境，CUDA 12.1 + PyTorch 2.5.1：
 
@@ -76,9 +76,7 @@ pip install --no-build-isolation -e .
 
 `--no-build-isolation` 用于强制复用当前环境的 torch；否则 pip 可能会在隔离环境中报 `ModuleNotFoundError: No module named 'torch'`。
 
-### 预训练权重
-
-#### DECA Setup
+### DECA Setup
 
 在进行训练数据准备之前，需先下载 DECA 的源文件与权重完成安装（下载 FLAME 资源需要注册账号）：
 
@@ -101,7 +99,7 @@ data/
   uv_face_mask.png
 ```
 
-#### FLUX.2-klein-base
+### FLUX.2-klein-base
 
 从 HuggingFace 下载 `black-forest-labs/FLUX.2-klein-base-4B`（Diffusers 格式）到当前目录：
 
@@ -572,6 +570,8 @@ The same setup commands are collected in `set_env.sh`:
 bash set_env.sh
 ```
 
+### PyTorch3D Installation
+
 The DECA renderer uses `pytorch3d`. For PyTorch 2.5, installing PyTorch3D from source is recommended:
 
 ```bash
@@ -579,6 +579,8 @@ git clone https://github.com/facebookresearch/pytorch3d.git
 cd pytorch3d
 pip install --no-build-isolation -e .
 ```
+
+### DECA Setup
 
 Required pretrained assets:
 
@@ -588,9 +590,14 @@ Required pretrained assets:
 | `generic_model.pkl` | `data/generic_model.pkl` | FLAME 2020 model |
 | `FLAME_texture.npz` | `data/FLAME_texture.npz` | FLAME texture space |
 | `head_template.obj`, `uv_face_eye_mask.png`, `fixed_displacement_256.npy`, `mean_texture.jpg` | `data/` | DECA static assets |
-| FLUX.2-klein-base | local `models/FLUX.2-klein-base/` or another configured path | Hugging Face model directory |
+
+### FLUX.2-klein-base
+
+Download `black-forest-labs/FLUX.2-klein-base-4B` in Diffusers format and point the corresponding yaml fields to the local model directory.
 
 ## 2. Data Preparation
+
+### 2.1 Download Preprocessed Dataset (FacePairEmoji)
 
 The released FacePairEmoji dataset is available at [`yunpengZhangup/FacePairEmoji`](https://huggingface.co/datasets/yunpengZhangup/FacePairEmoji). It contains the processed image folders, instruction jsonl files, and pre-extracted DECA parameters, so you can train directly without regenerating the metadata or DECA features:
 
@@ -627,6 +634,8 @@ data:
 
 The image paths stored in the jsonl files and the `src_root` values in the yaml files must use the same root convention. If you convert yaml paths to absolute paths, it is safer to convert `image_a_path` and `image_b_path` in the jsonl files to absolute paths as well; otherwise the dataset loader may fail to map an image path to the corresponding `.pt` file under `params_root`.
 
+### 2.2 Generate Expression-Pair JSONL
+
 If you want to use your own dataset, organize it as `<root>/<bucket>/<expression>/<prefix>_<id>.<ext>`, then generate expression-pair metadata:
 
 ```bash
@@ -639,13 +648,19 @@ python scripts/generate_pairs_jsonl.py \
   --output ./v1_pairs.jsonl
 ```
 
+### 2.3 LLM Quality Filtering and Instruction Generation
+
 The quality-filtering and instruction-generation stage is released as prompt templates under `prompts/`. API credentials and vendor-specific request code are intentionally not stored in this repository; connect the templates to your preferred multimodal or text LLM provider when reproducing this step.
+
+### 2.4 Offline DECA Parameter Extraction
 
 If you do not use the released pre-extracted DECA parameters, extract them offline before training:
 
 ```bash
 bash scripts/run_extract_multigpu.sh
 ```
+
+### 2.5 Verify Extracted Parameters
 
 Verify the extracted parameters:
 
@@ -661,7 +676,7 @@ python scripts/verify_deca_params.py \
 ## 3. Stage-1 Training
 
 <p align="center">
-  <img src="docs/figures/stage1_training.svg" width="860" alt="Stage1 training architecture">
+  <img src="docs/figures/stage1_training.png" width="860" alt="Stage1 training architecture">
 </p>
 
 Stage 1 trains a text-conditioned DECA expression encoder:
@@ -682,7 +697,7 @@ The best checkpoint is saved under `checkpoints/stage1/stage1-<timestamp>/best-s
 ## 4. Stage-2 Training
 
 <p align="center">
-  <img src="docs/figures/overview.svg" width="860" alt="Stage2 training architecture">
+  <img src="docs/figures/overview.png" width="860" alt="Stage2 training architecture">
 </p>
 
 Stage 2 jointly trains the FLUX.2 control pathway:
