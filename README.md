@@ -371,7 +371,7 @@ bash train/train_stage2.sh
 ## 5. Inference
 
 <p align="center">
-  <img src="docs/figures/rcg_inference.svg" width="900" alt="Reference Control Guidance inference workflow">
+  <img src="docs/figures/rcg_dynamic_inference.svg" width="900" alt="Reference Control Guidance dynamic inference workflow">
 </p>
 
 ### 5.1 RCG (Reference Control Guidance)
@@ -718,7 +718,7 @@ The resulting checkpoint is saved under `checkpoints/stage2/stage2-<timestamp>/b
 ## 5. Inference
 
 <p align="center">
-  <img src="docs/figures/rcg_inference.svg" width="900" alt="Reference Control Guidance inference workflow">
+  <img src="docs/figures/rcg_dynamic_inference.svg" width="900" alt="Reference Control Guidance dynamic inference workflow">
 </p>
 
 ### 5.1 Reference Control Guidance (RCG)
