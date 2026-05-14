@@ -64,7 +64,7 @@ pip install -r requirements.txt
 
 `set_env.sh` 已收录上述全部命令，可直接 `bash set_env.sh` 一键安装。
 
-### PyTorch3D 安装
+### PyTorch3D Installation
 
 本仓库的 DECA renderer 默认使用 `pytorch3d` 后端，**强烈建议从源码本地安装**（`conda` channel 上的旧包与 torch 2.5 不兼容），实测可用版本是 `pytorch3d 0.7.9`：
 
@@ -112,11 +112,11 @@ hf download black-forest-labs/FLUX.2-klein-base-4B \
 
 ---
 
-## 2. 数据准备
+## 2. Data Preparation
 
 本仓库的训练样本是 **(参考图 A, 目标图 B, 文本指令)** 三元组。你可以直接使用我们在 Hugging Face 上发布的预处理版本，其中已经包含图像、`*_pairs_with_instructions.jsonl` 和预提取的 `deca_params/*.pt`；也可以使用自己的数据集，并按 2.2–2.5 的流程重新生成 jsonl、指令与 DECA 参数。
 
-### 2.1 下载预处理数据集 (FacePairEmoji)
+### 2.1 Download Preprocessed Dataset (FacePairEmoji)
 
 预处理数据已上传到 Hugging Face：[`yunpengZhangup/FacePairEmoji`](https://huggingface.co/datasets/yunpengZhangup/FacePairEmoji)。仓库中包含：
 
@@ -172,7 +172,7 @@ data:
 
 如果你使用自建数据集，只需按上面格式组织：`<root>/<bucket>/<expression>/<prefix>_<id>.<ext>`，并在 `scripts/generate_pairs_jsonl.py:extract_person_id` 中扩展前缀解析，然后继续执行下面的数据准备流程。
 
-### 2.2 生成表情配对 jsonl
+### 2.2 Generate Expression-Pair JSONL
 
 按 person_id 分组、对同一人的不同表情做 C(n,2) 全配对：
 
@@ -204,7 +204,7 @@ python scripts/generate_pairs_jsonl.py \
 
 > 如果你直接使用 Hugging Face 上的 `*_pairs_with_instructions.jsonl`，可以跳过 2.2 和 2.3；只有在准备自己的数据集或重新生成配对时才需要执行下面两步。
 
-### 2.3 大模型质量过滤 + 指令生成
+### 2.3 LLM Quality Filtering and Instruction Generation
 
 本仓库**不提供具体的调用脚本**，仅公开这一阶段实际使用的 4 份 Prompt 模板。你可以把它们接到任意一家多模态 / 文本大模型 API 上（火山方舟 Doubao Vision、OpenAI GPT-4o、Gemini、Qwen-VL 等均可）复现同样的产物。
 
@@ -243,7 +243,7 @@ python scripts/generate_pairs_jsonl.py \
    - `gender` 可直接读 2 步产出的 `check_result.gender`。
 4. 将上述产物写回为 `*_pairs_with_instructions.jsonl`，供后续 Stage1 / Stage2 训练使用。
 
-### 2.4 离线提取 DECA 参数
+### 2.4 Offline DECA Parameter Extraction
 
 训练时不会在线跑 DECA encode（太慢），而是预先把每张图的 DECA 编码结果离线保存为 `.pt`：
 
@@ -271,7 +271,7 @@ python scripts/extract_deca_params.py \
 
 断点续跑：脚本会自动跳过已存在的 `.pt`，多卡互相不重叠。失败样本写入 `{out_root}/_failed_shard{i}.jsonl`。
 
-### 2.5 校验提取结果
+### 2.5 Verify Extracted Parameters
 
 ```bash
 python scripts/verify_deca_params.py \
@@ -290,7 +290,7 @@ python scripts/verify_deca_params.py \
 
 ---
 
-## 3. Stage1 训练 (Conditional DECA Encoder)
+## 3. Stage-1 Training (Conditional DECA Encoder)
 
 <p align="center">
   <img src="docs/figures/stage1_training.png" width="860" alt="Stage1 training architecture">
@@ -329,7 +329,7 @@ bash train/train_stage1.sh
 
 ---
 
-## 4. Stage2 训练 (FLUX.2 Control Mixer)
+## 4. Stage-2 Training (FLUX.2 Control Mixer)
 
 <p align="center">
   <img src="docs/figures/overview.png" width="860" alt="Stage2 training architecture">
@@ -368,7 +368,7 @@ bash train/train_stage2.sh
 
 ---
 
-## 5. 推理
+## 5. Inference
 
 <p align="center">
   <img src="docs/figures/rcg_inference.svg" width="900" alt="Reference Control Guidance inference workflow">
@@ -393,7 +393,7 @@ eps     = eps_ref + λ · (eps_tgt - eps_ref)
 
 RCG 以参考控制为基准，沿目标表情方向放大引导；`λ` 控制表情变化幅度，通常可在 `0/1/3/5/7` 中 sweep 选择。
 
-### 5.2 Stage1 推理 (控制图可视化)
+### 5.2 Stage-1 Inference (Control Map Visualization)
 
 用于验证 Stage1 是否能根据 prompt 输出合理的表情几何，输出 6 张图（参考路径 D_R + 目标路径 D_T，各 rendered/normal/albedo）+ 2 个 9ch tensor。
 
@@ -405,7 +405,7 @@ python infer/infer_stage1.py \
     --ckpt    ./checkpoints/stage1/stage1-<timestamp>/best-step-{N}.pt
 ```
 
-### 5.3 Stage2 推理 (端到端表情编辑)
+### 5.3 Stage-2 Inference (End-to-End Expression Editing)
 
 配置文件：[`configs/infer_stage2.yaml`](configs/infer_stage2.yaml) （独立于训练 yaml，只放推理相关字段）。
 
@@ -460,7 +460,7 @@ python infer/infer_stage2.py --config configs/infer_stage2.yaml \
 
 ---
 
-## 6. 配置参数说明
+## 6. Configuration Files
 
 本仓库共有三个 yaml 配置文件，分别对应训练 / 推理的不同阶段，所有可调字段都已在文件中带详细中文注释，按需修改即可：
 
@@ -474,7 +474,7 @@ python infer/infer_stage2.py --config configs/infer_stage2.yaml \
 
 ---
 
-## 7. 项目结构
+## 7. Repository Structure
 
 ```
 ControlFace-main/
@@ -513,7 +513,7 @@ ControlFace-main/
 
 ---
 
-## 致谢
+## Acknowledgements
 
 本项目在以下工作的基础上构建：
 - [ControlFace (CVPR 2025)](https://github.com/cvlab-kaist/ControlFace) – 控制范式与整体架构
