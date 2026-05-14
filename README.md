@@ -4,7 +4,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/figures/overview.svg" width="960" alt="3DMM-FLUX overall architecture">
+  <img src="docs/figures/overview.png" width="960" alt="3DMM-FLUX overall architecture">
 </p>
 
 <p align="center">
@@ -295,7 +295,7 @@ python scripts/verify_deca_params.py \
 ## 3. Stage1 训练 (Conditional DECA Encoder)
 
 <p align="center">
-  <img src="docs/figures/stage1_training.svg" width="860" alt="Stage1 training architecture">
+  <img src="docs/figures/stage1_training.png" width="860" alt="Stage1 training architecture">
 </p>
 
 Stage1 训练一个**文本条件的 DECA 表情/下颌头**：
@@ -334,7 +334,7 @@ bash train/train_stage1.sh
 ## 4. Stage2 训练 (FLUX.2 Control Mixer)
 
 <p align="center">
-  <img src="docs/figures/overview.svg" width="860" alt="Stage2 training architecture">
+  <img src="docs/figures/overview.png" width="860" alt="Stage2 training architecture">
 </p>
 
 Stage2 在 Stage1 基础上联合训练：
