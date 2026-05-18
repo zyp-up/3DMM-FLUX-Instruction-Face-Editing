@@ -4,12 +4,13 @@
 </p>
 
 <p align="center">
-  <img src="docs/figures/overview.png" width="960" alt="3DMM-FLUX overall architecture">
+  <b>中文</b> | <a href="README.md">English</a>
 </p>
 
 <p align="center">
-  <b>中文</b> | <a href="README.md">English</a>
+  <img src="docs/figures/overview.png" width="960" alt="3DMM-FLUX overall architecture">
 </p>
+
 
 ## 摘要
 

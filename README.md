@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/figures/overview.png" width="960" alt="3DMM-FLUX overall architecture">
+  <a href="README_CN.md">中文</a> | <b>English</b>
 </p>
 
 <p align="center">
-  <a href="README_CN.md">中文</a> | <b>English</b>
+  <img src="docs/figures/overview.png" width="960" alt="3DMM-FLUX overall architecture">
 </p>
 
 ## Abstract
